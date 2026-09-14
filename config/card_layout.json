@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "reference_width": 900,
+  "reference_height": 1350,
+  "default_font_family": "Arial",
+  "cost": {
+    "x": 62,
+    "y": 65,
+    "width": 150,
+    "font_size": 82,
+    "alignment": "center",
+    "max_lines": 1,
+    "line_spacing": 1,
+    "color": "#FFFFFF",
+    "stroke_color": "#26170D",
+    "stroke_width": 7,
+    "font_weight": "bold"
+  },
+  "value": {
+    "x": 688,
+    "y": 905,
+    "width": 150,
+    "font_size": 70,
+    "alignment": "center",
+    "max_lines": 1,
+    "line_spacing": 1,
+    "color": "#FFFFFF",
+    "stroke_color": "#26170D",
+    "stroke_width": 6,
+    "font_weight": "bold"
+  },
+  "name": {
+    "x": 135,
+    "y": 1005,
+    "width": 630,
+    "font_size": 54,
+    "alignment": "center",
+    "max_lines": 1,
+    "line_spacing": 1,
+    "color": "#FFF4D6",
+    "stroke_color": "#26170D",
+    "stroke_width": 5,
+    "font_weight": "bold"
+  },
+  "card_type": {
+    "x": 180,
+    "y": 1070,
+    "width": 540,
+    "font_size": 32,
+    "alignment": "center",
+    "max_lines": 1,
+    "line_spacing": 1,
+    "color": "#4A2B1A",
+    "stroke_color": "#00000000",
+    "stroke_width": 0,
+    "font_weight": "bold"
+  },
+  "description": {
+    "x": 145,
+    "y": 1135,
+    "width": 610,
+    "font_size": 36,
+    "alignment": "center",
+    "max_lines": 4,
+    "line_spacing": 1.25,
+    "color": "#332116",
+    "stroke_color": "#00000000",
+    "stroke_width": 0,
+    "font_weight": "normal"
+  }
+}

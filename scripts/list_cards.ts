@@ -10,7 +10,7 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await rename(temporary, path);
 }
 
-const refresh = process.argv.includes("--refresh");
+const refresh = process.argv.includes("--refresh") || process.env.npm_config_refresh === "true";
 const source = await fetchCards({ refresh });
 const catalog = buildCatalog(source.cards);
 const summary = summarizeCatalog(catalog);

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { IPC, type BatchRequest, type CatalogPayload, type DesktopApi, type PreviewPayload } from "../src/ipc-contract.ts";
+import { IPC, type BatchRequest, type CatalogPayload, type DesktopApi, type PreviewPayload, type StudioCardPayload, type StudioExportPayload, type StudioMetadataRequest, type StudioPreviewPayload } from "../src/ipc-contract.ts";
 import type { BatchReport, ExportedCard } from "../src/exporter.ts";
 import type { CatalogFilters } from "../src/filters.ts";
 
@@ -13,7 +13,12 @@ const api: DesktopApi = {
   getBatchPlan: (filters: CatalogFilters) => ipcRenderer.invoke(IPC.batchPlan, filters),
   exportBatch: (request: BatchRequest) => ipcRenderer.invoke(IPC.batchExport, request) as Promise<BatchReport>,
   openExportFolder: () => ipcRenderer.invoke(IPC.folderOpenExport) as Promise<void>,
-  openCardFolder: (cardId: string) => ipcRenderer.invoke(IPC.folderOpenCard, cardId) as Promise<void>
+  openCardFolder: (cardId: string) => ipcRenderer.invoke(IPC.folderOpenCard, cardId) as Promise<void>,
+  loadStudioCard: (cardId: string) => ipcRenderer.invoke(IPC.studioLoad, cardId) as Promise<StudioCardPayload>,
+  saveStudioMetadata: (request: StudioMetadataRequest) => ipcRenderer.invoke(IPC.studioSaveMetadata, request) as Promise<StudioCardPayload>,
+  importStudioClean: (cardId: string) => ipcRenderer.invoke(IPC.studioImportClean, cardId) as Promise<StudioCardPayload | null>,
+  renderStudioPreview: (request: StudioMetadataRequest) => ipcRenderer.invoke(IPC.studioRenderPreview, request) as Promise<StudioPreviewPayload>,
+  exportStudioRendered: (request: StudioMetadataRequest) => ipcRenderer.invoke(IPC.studioExportRendered, request) as Promise<StudioExportPayload>
 };
 
 contextBridge.exposeInMainWorld("axieCards", Object.freeze(api));

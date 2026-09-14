@@ -7,12 +7,15 @@ import { acquireCardImage } from "../src/downloader.ts";
 import { batchPlan, exportBatch, exportCard } from "../src/exporter.ts";
 import { filterCatalog } from "../src/filters.ts";
 import { IPC, type CatalogPayload } from "../src/ipc-contract.ts";
-import { validateBatchRequest, validateCardId, validateFilters } from "../src/ipc-validation.ts";
+import { validateBatchRequest, validateCardId, validateFilters, validateStudioMetadataRequest } from "../src/ipc-validation.ts";
+import { createCardStudioService } from "../src/studio-service.ts";
 
 export interface DesktopPaths {
   catalogCache: string;
   imageCache: string;
   logFile: string;
+  studioRoot: string;
+  layoutConfig: string;
 }
 
 export function registerIpc(paths: DesktopPaths): void {
@@ -20,6 +23,7 @@ export function registerIpc(paths: DesktopPaths): void {
   let exportRoot: string | null = null;
   const exportedImagePaths = new Map<string, string>();
   const catalogLoader = createCatalogLoader({ cachePath: paths.catalogCache });
+  const studio = createCardStudioService({ root: paths.studioRoot, layoutPath: paths.layoutConfig });
 
   const log = async (message: string) => {
     try {
@@ -122,5 +126,70 @@ export function registerIpc(paths: DesktopPaths): void {
     const folder = dirname(imagePath);
     const error = await shell.openPath(folder);
     if (error) throw new Error("Export this card before opening its folder");
+  });
+  ipcMain.handle(IPC.studioLoad, async (_event, cardId: unknown) => studio.load(await findById(cardId)));
+  ipcMain.handle(IPC.studioSaveMetadata, async (_event, requestValue: unknown) => {
+    const request = validateStudioMetadataRequest(requestValue);
+    const card = await findById(request.cardId);
+    try {
+      return await studio.saveMetadata(card, request.metadata);
+    } catch (error) {
+      await log(`studio metadata ${card.id}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error("Could not save game metadata. Check the field values and try again.");
+    }
+  });
+  ipcMain.handle(IPC.studioImportClean, async (_event, cardIdValue: unknown) => {
+    const card = await findById(cardIdValue);
+    const selection = await dialog.showOpenDialog({
+      title: `Select clean visual for ${card.name}`,
+      properties: ["openFile"],
+      filters: [{ name: "PNG image", extensions: ["png"] }]
+    });
+    if (selection.canceled || !selection.filePaths[0]) return null;
+    try {
+      return await studio.importClean(card, selection.filePaths[0]);
+    } catch (error) {
+      if (error instanceof Error && /conflict/i.test(error.message)) {
+        const confirmation = await dialog.showMessageBox({
+          type: "warning",
+          title: "Replace clean visual?",
+          message: "A different clean visual is already associated with this card.",
+          detail: "Replacing it does not modify RAW, but future previews and rendered exports will use the new clean PNG.",
+          buttons: ["Cancel", "Replace Clean Visual"],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true
+        });
+        if (confirmation.response === 0) return null;
+        return studio.importClean(card, selection.filePaths[0], true);
+      }
+      await log(`studio clean import ${card.id}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error("Could not import the clean visual. Select a valid PNG file.");
+    }
+  });
+  ipcMain.handle(IPC.studioRenderPreview, async (_event, requestValue: unknown) => {
+    const request = validateStudioMetadataRequest(requestValue);
+    const card = await findById(request.cardId);
+    try {
+      const result = await studio.render(card, request.metadata);
+      return {
+        dataUrl: `data:image/png;base64,${Buffer.from(result.bytes).toString("base64")}`,
+        sha256: result.sha256,
+        cleanSha256: result.cleanSha256
+      };
+    } catch (error) {
+      await log(`studio preview ${card.id}: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
+  });
+  ipcMain.handle(IPC.studioExportRendered, async (_event, requestValue: unknown) => {
+    const request = validateStudioMetadataRequest(requestValue);
+    const card = await findById(request.cardId);
+    try {
+      return await studio.exportRendered(card, request.metadata);
+    } catch (error) {
+      await log(`studio render export ${card.id}: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
   });
 }

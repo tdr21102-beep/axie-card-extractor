@@ -9,19 +9,23 @@
     "inspect": "node --experimental-strip-types scripts/inspect_source.ts",
     "list": "node --experimental-strip-types scripts/list_cards.ts",
     "download": "node --experimental-strip-types scripts/download_card.ts",
-    "acceptance": "node --experimental-strip-types scripts/acceptance.ts",
+    "acceptance": "npm run acceptance:extractor && npm run acceptance:studio",
+    "acceptance:extractor": "node --experimental-strip-types scripts/acceptance.ts",
+    "acceptance:studio": "node --experimental-strip-types scripts/studio_acceptance.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "dev": "node scripts/dev.mjs",
     "build:renderer": "vite build",
     "build:electron": "node scripts/build-electron.mjs",
     "build": "npm run typecheck && npm test && npm run build:renderer && npm run build:electron",
+    "smoke:gui": "npm run build:renderer && npm run build:electron && node scripts/gui-smoke.mjs",
     "dist": "npm run build && electron-builder --win portable"
   },
   "engines": {
     "node": ">=22.6.0"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.100",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
@@ -46,7 +50,11 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
+      "config/**/*",
       "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/@napi-rs/canvas*/**/*"
     ],
     "win": {
       "target": "portable"

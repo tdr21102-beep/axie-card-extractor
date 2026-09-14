@@ -39,6 +39,50 @@ La metadata se escribe bajo `data/<class>/` o `data/` según el layout. El prime
 
 Los nombres derivan del slug mediante la utilidad compartida `snakeCase`. Por eso las variantes de Nut Cracker se exportan sin colisión como `nut_cracker.png`, `nut_cracker_ears.png` y `nut_cracker_tail.png`.
 
+## Card Studio
+
+La tercera pestaña compone una carta sin modificar ninguno de sus inputs:
+
+```text
+clean visual PNG + game metadata JSON + config/card_layout.json
+  -> renderer raster local
+  -> rendered final PNG
+```
+
+El browser de la izquierda selecciona una carta del catálogo. La preview central se actualiza después de editar cualquier campo y muestra claramente `Clean visual not available` hasta importar manualmente un PNG clean. El editor derecho separa Source Metadata de Sanity, siempre read-only, de Game Metadata editable.
+
+Campos editables: Name, Cost, Value, Card Type y Description. `card_type` ofrece `attack`, `skill`, `secret` y `power` como sugerencias, pero acepta texto extensible. Los botones permiten guardar el JSON, descartar cambios no guardados e importar/exportar imágenes.
+
+Desktop guarda las capas editables bajo el directorio de datos de usuario de Electron:
+
+```text
+cards/
+├── clean/<class>/<card_name>.png
+├── data/<class>/<card_name>.json
+└── rendered/<class>/<card_name>.png
+```
+
+Las rutas se derivan del ID/slug source, nunca del nombre editable. Importar un clean distinto requiere confirmación. Los PNG se validan, se copian sin transformación y se registran con SHA-256. Preview y export usan el mismo servicio backend; React no dibuja ni escribe archivos.
+
+El layout versionado está en `config/card_layout.json`, con referencia 900×1350 y posición, ancho, fuente, alineación, líneas y espaciado para cada campo. El renderer escala esas coordenadas a las dimensiones reales del clean, conserva alpha y soporta wrapping, clipping y ellipsis.
+
+El ejemplo solicitado está en `cards/data/beast/furball.json`:
+
+```json
+{
+  "id": "furball",
+  "name": "Furball",
+  "class": "beast",
+  "part": "back",
+  "cost": 1,
+  "value": 40,
+  "card_type": "attack",
+  "description": "Deal 2 hits."
+}
+```
+
+No existe integración con OpenAI, OCR ni borrado automático. El almacenamiento clean queda desacoplado para que una iteración futura pueda producir ese input con otro proveedor sin cambiar metadata ni renderer.
+
 ## Fuente y cache
 
 - Metadata source: Sanity public dataset `tac9w5pw / production`, API `2022-01-31`.
@@ -82,7 +126,13 @@ Para ejecutar los casos reales de aceptación del catálogo, Teal Shell, Cucumbe
 npm run acceptance
 ```
 
-Los outputs de aceptación quedan bajo `output/acceptance/` y son regenerables.
+`npm run acceptance` ejecuta las regresiones del extractor y el flujo Furball de Card Studio. También pueden ejecutarse por separado con `npm run acceptance:extractor` y `npm run acceptance:studio`. Los outputs quedan bajo `output/acceptance/` y son regenerables.
+
+La aceptación de GUI abre Electron empaquetado localmente, entra a Card Studio, selecciona Furball y captura el editor:
+
+```powershell
+npm run smoke:gui
+```
 
 ## Desarrollo y tests
 
@@ -99,7 +149,9 @@ La suite cubre el core original, filtros, búsqueda, layouts, nombres sin colisi
 - Los PNG son renders completos; no hay artwork separado.
 - Sanity no publica cost/effect/type estructurados para la mayoría de las cartas.
 - No se usa OCR, IA ni inferencia desde píxeles.
-- No hay editor, eliminación de texto, pixel art, integración Godot ni generación de imágenes.
+- La fuente temporal es `Arial` del sistema. El layout admite reemplazarla, pero falta seleccionar y versionar una fuente pixel-art con licencia segura para garantizar tipografía idéntica entre PCs.
+- La composición es determinista dentro del mismo runtime/fuente; con una fuente de sistema, el raster puede variar entre equipos.
+- No hay eliminación de texto, generación de imágenes, OCR, integración Godot ni sistema de combate.
 - El portable no está firmado; Windows puede mostrar una advertencia de reputación.
 - La V1 usa el ícono por defecto de Electron.
 - La primera carga sin cache requiere acceso a Sanity y la primera preview/exportación requiere acceso al CDN.

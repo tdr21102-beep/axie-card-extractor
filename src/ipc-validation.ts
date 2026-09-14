@@ -1,4 +1,5 @@
-import type { BatchRequest } from "./ipc-contract.ts";
+import { validateGameMetadata } from "./card-studio.ts";
+import type { BatchRequest, StudioMetadataRequest } from "./ipc-contract.ts";
 import type { CatalogFilters } from "./filters.ts";
 
 const CLASSES = new Set(["Aqua", "Beast", "Bird", "Bug", "Plant", "Reptile"]);
@@ -31,4 +32,13 @@ export function validateBatchRequest(value: unknown): BatchRequest {
   if (layout !== "by-class" && layout !== "flat") throw new Error("Invalid output layout");
   if (typeof candidate.exportMetadata !== "boolean") throw new Error("Invalid metadata option");
   return { filters: validateFilters(candidate.filters), layout, exportMetadata: candidate.exportMetadata };
+}
+
+export function validateStudioMetadataRequest(value: unknown): StudioMetadataRequest {
+  if (!value || typeof value !== "object") throw new Error("Invalid Card Studio request");
+  const candidate = value as Record<string, unknown>;
+  return {
+    cardId: validateCardId(candidate.cardId),
+    metadata: validateGameMetadata(candidate.metadata)
+  };
 }

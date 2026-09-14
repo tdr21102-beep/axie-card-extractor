@@ -1,0 +1,10 @@
+{
+  "id": "furball",
+  "name": "Furball",
+  "class": "beast",
+  "part": "back",
+  "cost": 1,
+  "value": 40,
+  "card_type": "attack",
+  "description": "Deal 2 hits."
+}

@@ -7,7 +7,7 @@ const shared = {
   bundle: true,
   platform: "node",
   target: "node22",
-  external: ["electron"],
+  external: ["electron", "@napi-rs/canvas"],
   sourcemap: true,
   logLevel: "warning"
 };

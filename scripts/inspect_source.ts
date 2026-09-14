@@ -19,7 +19,8 @@ const nextData = JSON.parse(nextDataMatch[1]);
 const embeddedCards = nextData?.props?.pageProps?.allCards;
 if (!Array.isArray(embeddedCards)) throw new Error("__NEXT_DATA__ does not contain pageProps.allCards");
 
-const source = await fetchCards({ refresh: process.argv.includes("--refresh") });
+const refresh = process.argv.includes("--refresh") || process.env.npm_config_refresh === "true";
+const source = await fetchCards({ refresh });
 const catalog = buildCatalog(source.cards);
 const bundlePaths = [...html.matchAll(/(?:src|href)="([^"?]+_next\/static[^"?]+)"/g)].map((match) => match[1]);
 const targetNames = ["Teal Shell", "Catfish", "Nut Cracker", "Cucumber Slice"];
