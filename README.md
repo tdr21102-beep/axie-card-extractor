@@ -1,58 +1,105 @@
-# axie-card-extractor
+# AXIE / CARD EXTRACTOR
 
-Proof of Concept reproducible para catalogar y descargar, sin modificar, las cartas que publica [Axie Origin Card Explorer](https://origin-rosy.vercel.app/).
+Desktop V1 y CLI reproducible para catalogar, previsualizar y exportar sin modificaciones las 192 cartas publicadas en el dataset público de Sanity usado por Axie Origin Card Explorer.
 
-## Resultado
+## Desktop V1
 
-- Fuente: dataset público Sanity `tac9w5pw / production`.
-- Catálogo: 192 documentos `card`, 32 por cada una de 6 clases.
-- Imágenes: assets PNG originales de Sanity CDN, 900×1350 en las 192 cartas.
-- Integridad: validación contra tamaño y SHA-1 de Sanity, más SHA-256 local.
-- Dependencias npm: ninguna. Requiere Node.js 22.6 o posterior.
+La aplicación usa Electron, React, Vite y TypeScript. Conserva el backend original en `src/` y lo comparte con la CLI mediante esta separación:
 
-Los PNG son renders completos de carta y ya contienen el coste, nombre, tipo visual y texto de efecto. El dataset no ofrece esos datos de forma estructurada para 188 de las 192 cartas. Este PoC no usa OCR ni transcribe/infiere esos campos desde píxeles.
+```text
+React UI -> preload API -> IPC validado -> backend TypeScript -> Sanity/cache/exporter
+```
 
-## Uso
+Electron se ejecuta con `contextIsolation: true`, `nodeIntegration: false` y sandbox habilitado. El renderer no recibe acceso general a Node ni ejecuta comandos CLI como subprocesses.
+
+Requisitos: Node.js 22.6 o posterior y Windows para generar el portable.
+
+```powershell
+npm ci
+npm run dev
+```
+
+## Card Catalog
+
+La pestaña **Card Catalog** muestra metadata de las 192 cartas y permite filtrar por clase y parte, además de buscar instantáneamente por display name, slug, nombre local o ID interno. La lista no carga imágenes. Solo al seleccionar una carta se descarga o reutiliza desde cache su preview original.
+
+El panel de detalle muestra los campos reales disponibles: clase, parte, ID de Sanity, slug, nombre local, URL, body, mana/cost, effect y card type. Los valores ausentes se identifican como no estructurados en la fuente. También muestra dimensiones, SHA-256 y estado Cached/Downloaded.
+
+**Export Raw Card** conserva exactamente los bytes descargados: no recomprime, redimensiona, recorta ni transforma el PNG. Si un archivo idéntico ya existe se omite; si el mismo nombre contiene bytes distintos se informa un conflicto y no se sobrescribe.
+
+## Batch Export
+
+La pestaña **Batch Export** filtra por clase y parte, anticipa cuántas cartas están cacheadas y permite elegir:
+
+- **By Class** (default): `<export_root>/<class>/<local_name>.png`
+- **Flat Folder**: `<export_root>/<local_name>.png`
+- **Export metadata JSON** (activado por defecto)
+
+La metadata se escribe bajo `data/<class>/` o `data/` según el layout. El primer lote crea `batch_report.json` con filtros, layout, totales y resultado individual; las ejecuciones diferentes posteriores preservan los reportes previos usando `batch_report_2.json`, etc. Un error de red, imagen o filesystem en una carta no detiene las demás.
+
+Los nombres derivan del slug mediante la utilidad compartida `snakeCase`. Por eso las variantes de Nut Cracker se exportan sin colisión como `nut_cracker.png`, `nut_cracker_ears.png` y `nut_cracker_tail.png`.
+
+## Fuente y cache
+
+- Metadata source: Sanity public dataset `tac9w5pw / production`, API `2022-01-31`.
+- Image source: Sanity CDN.
+- Tipo consultado: `card`.
+- Total conocido: 192 cartas, 32 por clase.
+
+La aplicación no se presenta como fuente oficial. `cache/` es descartable en la CLI; Desktop usa el directorio de datos de usuario de Electron. Si el catálogo cacheado es válido, el inicio no fuerza una consulta. **Refresh Catalog** solicita una actualización explícita.
+
+## CLI
+
+Los comandos originales continúan disponibles:
 
 ```powershell
 npm run inspect
-npm run list
-npm run download -- --name "Teal Shell"
-npm test
-```
-
-En npm 10 para Windows, `--name` puede ser consumido por npm; el script acepta también el valor posicional resultante. También se puede usar un slug para resolver variantes:
-
-```powershell
-npm run download -- --name "nut-cracker-tail"
-```
-
-`Nut Cracker` tiene tres documentos. El nombre sin sufijo selecciona determinísticamente el slug canónico `nut-cracker` (Mouth); los otros son `nut-cracker-ears` y `nut-cracker-tail`.
-
-Para forzar una consulta nueva y omitir el catálogo cacheado:
-
-```powershell
-npm run list -- --refresh
 npm run inspect -- --refresh
+npm run list
+npm run list -- --refresh
+npm run download -- --name "Teal Shell"
+npm run download -- --name "nut-cracker-tail"
+npm test
+npm run typecheck
 ```
 
-## Archivos producidos
+## Build y portable Windows
 
-- `output/card_catalog.json`: catálogo normalizado y ordenado por nombre/slug.
-- `output/catalog_summary.json`: total, clases y nombres duplicados.
-- `output/raw/<class>/<slug_snake_case>.png`: bytes originales sin recomprimir.
-- `output/data/<slug_snake_case>.json`: metadata, hashes y procedencia.
-- `debug/source_report.json`: reporte legible por máquina con fuente, consulta y casos de prueba.
-- `debug/findings.md`: conclusiones técnicas y limitaciones.
+```powershell
+npm run build
+npm run dist
+```
 
-`cache/` es descartable. En cold start, los scripts reconstruyen el cache consultando la fuente pública.
+El build genera el renderer en `dist/`, los procesos Electron en `dist-electron/` y el portable sin firma en:
 
-## Modelo de datos
+```text
+release/Axie Card Extractor.exe
+```
 
-El catálogo preserva el ID y slug técnico de Sanity. `local_name` deriva del slug y usa `snake_case`, lo que evita colisiones entre variantes con el mismo display name.
+Para ejecutar los casos reales de aceptación del catálogo, Teal Shell, Cucumber Slice, variantes Nut Cracker y batch Aqua:
 
-Los campos `cost`, `effect` y `card_type` son `null` cuando Sanity no los publica. En los únicos cuatro documentos con `body`, el PoC conserva `body_text`; además reconoce exclusivamente líneas explícitas `Mana: N` como coste. No analiza imágenes.
+```powershell
+npm run acceptance
+```
 
-## Seguridad y alcance
+Los outputs de aceptación quedan bajo `output/acceptance/` y son regenerables.
 
-Solo se utilizan endpoints públicos, sin token, credenciales ni bypass de autenticación. El flujo no redimensiona, recorta, optimiza ni vuelve a codificar imágenes.
+## Desarrollo y tests
+
+```powershell
+npm run typecheck
+npm test
+npm run build
+```
+
+La suite cubre el core original, filtros, búsqueda, layouts, nombres sin colisión, metadata, cache hit/miss, aislamiento batch, cold start e IPC. `npm ci` usa el lockfile versionado.
+
+## Limitaciones conocidas
+
+- Los PNG son renders completos; no hay artwork separado.
+- Sanity no publica cost/effect/type estructurados para la mayoría de las cartas.
+- No se usa OCR, IA ni inferencia desde píxeles.
+- No hay editor, eliminación de texto, pixel art, integración Godot ni generación de imágenes.
+- El portable no está firmado; Windows puede mostrar una advertencia de reputación.
+- La V1 usa el ícono por defecto de Electron.
+- La primera carga sin cache requiere acceso a Sanity y la primera preview/exportación requiere acceso al CDN.

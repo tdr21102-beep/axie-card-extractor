@@ -3,14 +3,53 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Proof of concept for reproducibly cataloging and downloading Axie Origin cards from the public source used by origin-rosy.vercel.app.",
+  "description": "Desktop and CLI tool for reproducibly cataloging and exporting Axie Origin cards from the public Sanity source.",
+  "main": "dist-electron/main.cjs",
   "scripts": {
     "inspect": "node --experimental-strip-types scripts/inspect_source.ts",
     "list": "node --experimental-strip-types scripts/list_cards.ts",
     "download": "node --experimental-strip-types scripts/download_card.ts",
-    "test": "node --experimental-strip-types --test tests/*.test.ts"
+    "acceptance": "node --experimental-strip-types scripts/acceptance.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "dev": "node scripts/dev.mjs",
+    "build:renderer": "vite build",
+    "build:electron": "node scripts/build-electron.mjs",
+    "build": "npm run typecheck && npm test && npm run build:renderer && npm run build:electron",
+    "dist": "npm run build && electron-builder --win portable"
   },
   "engines": {
     "node": ">=22.6.0"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.9",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5"
+  },
+  "build": {
+    "appId": "com.axietools.cardextractor",
+    "productName": "Axie Card Extractor",
+    "artifactName": "Axie Card Extractor.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "portable"
+    }
   }
 }

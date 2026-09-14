@@ -8,6 +8,7 @@ debug/
 
 # Builds
 dist/
+dist-electron/
 build/
 release/
 
@@ -19,6 +20,9 @@ release/
 # Logs
 *.log
 logs/
+
+# Vite
+.vite/
 
 # OS / Editors
 .DS_Store

@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 export const SITE_URL = "https://origin-rosy.vercel.app/";
@@ -96,15 +97,22 @@ export function parseSanityCards(payload: unknown): SanityCard[] {
 
 async function atomicWrite(path: string, data: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.tmp`;
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporary, data);
-  await rename(temporary, path);
+  try {
+    await rename(temporary, path);
+  } catch (error) {
+    if (!["EEXIST", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    await rm(path, { force: true });
+    await rename(temporary, path);
+  }
 }
 
 export async function fetchCards(options: {
   cachePath?: string;
   refresh?: boolean;
   fetchImpl?: typeof fetch;
+  timeoutMs?: number;
 } = {}): Promise<{ cards: SanityCard[]; cache: "hit" | "miss"; fetchedAt: string | null }> {
   const cachePath = resolve(options.cachePath ?? "cache/sanity_card_catalog_source.json");
   if (!options.refresh) {
@@ -117,7 +125,8 @@ export async function fetchCards(options: {
   }
 
   const response = await (options.fetchImpl ?? fetch)(queryUrl(), {
-    headers: { accept: "application/json", "user-agent": "axie-card-extractor-poc/0.1" }
+    headers: { accept: "application/json", "user-agent": "axie-card-extractor/1.0" },
+    signal: AbortSignal.timeout(options.timeoutMs ?? 30_000)
   });
   if (!response.ok) throw new Error(`Sanity query failed: ${response.status} ${response.statusText}`);
   const payload = await response.json() as SanityQueryResponse;
