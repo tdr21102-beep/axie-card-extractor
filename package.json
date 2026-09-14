@@ -1,0 +1,16 @@
+{
+  "name": "axie-card-extractor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Proof of concept for reproducibly cataloging and downloading Axie Origin cards from the public source used by origin-rosy.vercel.app.",
+  "scripts": {
+    "inspect": "node --experimental-strip-types scripts/inspect_source.ts",
+    "list": "node --experimental-strip-types scripts/list_cards.ts",
+    "download": "node --experimental-strip-types scripts/download_card.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  }
+}
