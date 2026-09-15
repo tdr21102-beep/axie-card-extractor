@@ -1,5 +1,5 @@
 import { validateGameMetadata } from "./card-studio.ts";
-import type { BatchRequest, StudioMetadataRequest } from "./ipc-contract.ts";
+import type { BatchRequest, StudioGameExportRequest, StudioMetadataRequest } from "./ipc-contract.ts";
 import type { CatalogFilters } from "./filters.ts";
 
 const CLASSES = new Set(["Aqua", "Beast", "Bird", "Bug", "Plant", "Reptile"]);
@@ -41,4 +41,11 @@ export function validateStudioMetadataRequest(value: unknown): StudioMetadataReq
     cardId: validateCardId(candidate.cardId),
     metadata: validateGameMetadata(candidate.metadata)
   };
+}
+
+export function validateStudioGameExportRequest(value: unknown): StudioGameExportRequest {
+  const base = validateStudioMetadataRequest(value);
+  const visualSource = (value as Record<string, unknown>).visualSource;
+  if (visualSource !== "original" && visualSource !== "rendered") throw new Error("Invalid game visual source");
+  return { ...base, visualSource };
 }

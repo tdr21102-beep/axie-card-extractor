@@ -9,9 +9,10 @@
     "inspect": "node --experimental-strip-types scripts/inspect_source.ts",
     "list": "node --experimental-strip-types scripts/list_cards.ts",
     "download": "node --experimental-strip-types scripts/download_card.ts",
-    "acceptance": "npm run acceptance:extractor && npm run acceptance:studio",
+    "acceptance": "npm run acceptance:extractor && npm run acceptance:studio && npm run acceptance:studio-v2",
     "acceptance:extractor": "node --experimental-strip-types scripts/acceptance.ts",
     "acceptance:studio": "node --experimental-strip-types scripts/studio_acceptance.ts",
+    "acceptance:studio-v2": "node --experimental-strip-types scripts/studio_v2_acceptance.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "dev": "node scripts/dev.mjs",
@@ -51,6 +52,7 @@
       "dist/**/*",
       "dist-electron/**/*",
       "config/**/*",
+      "assets/**/*",
       "package.json"
     ],
     "asarUnpack": [

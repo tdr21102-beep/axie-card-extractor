@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "types": {
+    "attack": {
+      "label": "Attack",
+      "icon_reference": null,
+      "style_key": "attack"
+    },
+    "skill": {
+      "label": "Skill",
+      "icon_reference": null,
+      "style_key": "skill"
+    },
+    "secret": {
+      "label": "Secret",
+      "icon_reference": null,
+      "style_key": "secret"
+    },
+    "power": {
+      "label": "Power",
+      "icon_reference": null,
+      "style_key": "power"
+    }
+  }
+}

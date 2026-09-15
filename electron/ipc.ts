@@ -7,7 +7,7 @@ import { acquireCardImage } from "../src/downloader.ts";
 import { batchPlan, exportBatch, exportCard } from "../src/exporter.ts";
 import { filterCatalog } from "../src/filters.ts";
 import { IPC, type CatalogPayload } from "../src/ipc-contract.ts";
-import { validateBatchRequest, validateCardId, validateFilters, validateStudioMetadataRequest } from "../src/ipc-validation.ts";
+import { validateBatchRequest, validateCardId, validateFilters, validateStudioGameExportRequest, validateStudioMetadataRequest } from "../src/ipc-validation.ts";
 import { createCardStudioService } from "../src/studio-service.ts";
 
 export interface DesktopPaths {
@@ -16,14 +16,15 @@ export interface DesktopPaths {
   logFile: string;
   studioRoot: string;
   layoutConfig: string;
+  initialExportRoot?: string;
 }
 
 export function registerIpc(paths: DesktopPaths): void {
   let catalog: CatalogCard[] = [];
-  let exportRoot: string | null = null;
+  let exportRoot: string | null = paths.initialExportRoot ?? null;
   const exportedImagePaths = new Map<string, string>();
   const catalogLoader = createCatalogLoader({ cachePath: paths.catalogCache });
-  const studio = createCardStudioService({ root: paths.studioRoot, layoutPath: paths.layoutConfig });
+  const studio = createCardStudioService({ root: paths.studioRoot, layoutPath: paths.layoutConfig, imageCache: paths.imageCache });
 
   const log = async (message: string) => {
     try {
@@ -175,7 +176,8 @@ export function registerIpc(paths: DesktopPaths): void {
       return {
         dataUrl: `data:image/png;base64,${Buffer.from(result.bytes).toString("base64")}`,
         sha256: result.sha256,
-        cleanSha256: result.cleanSha256
+        cleanSha256: result.cleanSha256,
+        warnings: result.warnings
       };
     } catch (error) {
       await log(`studio preview ${card.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -189,6 +191,16 @@ export function registerIpc(paths: DesktopPaths): void {
       return await studio.exportRendered(card, request.metadata);
     } catch (error) {
       await log(`studio render export ${card.id}: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
+  });
+  ipcMain.handle(IPC.studioExportGameCard, async (_event, requestValue: unknown) => {
+    const request = validateStudioGameExportRequest(requestValue);
+    const card = await findById(request.cardId);
+    try {
+      return await studio.exportGameCard(card, request.metadata, request.visualSource, requireExportRoot());
+    } catch (error) {
+      await log(`studio game export ${card.id}: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
     }
   });

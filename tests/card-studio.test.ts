@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { createCanvas } from "@napi-rs/canvas";
 import {
@@ -33,6 +33,7 @@ test("default game metadata uses safe source fields without persisting", async (
   const root = await mkdtemp(join(tmpdir(), "axie-studio-default-"));
   const source = catalogCard();
   assert.deepEqual(defaultGameMetadata(source), {
+    schema_version: 2,
     id: "teal_shell",
     name: "Teal Shell",
     class: "aqua",
@@ -40,11 +41,15 @@ test("default game metadata uses safe source fields without persisting", async (
     cost: null,
     value: null,
     card_type: "",
-    description: ""
+    description: "",
+    targeting: { mode: "single_enemy" },
+    effects: []
   });
   assert.deepEqual(await loadGameMetadata(source, root), {
     metadata: defaultGameMetadata(source),
-    status: "default"
+    status: "default",
+    sourceSchemaVersion: null,
+    migrated: false
   });
   await assert.rejects(readFile(cardStudioPaths(source, root).data), { code: "ENOENT" });
 });
@@ -61,18 +66,40 @@ test("metadata save, reload and JSON roundtrip preserve editable values", async 
     description: "Deal 2 hits."
   };
   assert.deepEqual(await saveGameMetadata(source, metadata, root), metadata);
-  assert.deepEqual(await loadGameMetadata(source, root), { metadata, status: "saved" });
+  assert.deepEqual(await loadGameMetadata(source, root), { metadata, status: "saved", sourceSchemaVersion: 2, migrated: false });
   assert.deepEqual(JSON.parse(await readFile(cardStudioPaths(source, root).data, "utf8")), metadata);
   const edited = { ...metadata, value: 40, description: "Deal 2 hits twice." };
   assert.deepEqual(await saveGameMetadata(source, edited, root), edited);
-  assert.deepEqual(await loadGameMetadata(source, root), { metadata: edited, status: "saved" });
+  assert.deepEqual(await loadGameMetadata(source, root), { metadata: edited, status: "saved", sourceSchemaVersion: 2, migrated: false });
+});
+
+test("loads V1 metadata as V2 in memory without rewriting until explicit save", async () => {
+  const root = await mkdtemp(join(tmpdir(), "axie-studio-v1-"));
+  const source = catalogCard();
+  const path = cardStudioPaths(source, root).data;
+  const v1 = {
+    id: "teal_shell", name: "Teal Shell", class: "aqua", part: "horn",
+    cost: 1, value: 40, card_type: "attack", description: "Deal 2 hits."
+  };
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(v1, null, 2)}\n`);
+  const before = await readFile(path, "utf8");
+  const loaded = await loadGameMetadata(source, root);
+  assert.equal(loaded.metadata.schema_version, 2);
+  assert.equal(loaded.migrated, true);
+  assert.equal(loaded.sourceSchemaVersion, 1);
+  assert.deepEqual(loaded.metadata.effects, []);
+  assert.equal(await readFile(path, "utf8"), before);
+  await saveGameMetadata(source, loaded.metadata, root);
+  assert.equal(JSON.parse(await readFile(path, "utf8")).schema_version, 2);
 });
 
 test("metadata validation rejects malformed fields and returns an independent object", () => {
   const valid = defaultGameMetadata(catalogCard());
-  const validated = validateGameMetadata({ ...valid, ignoredSourceValue: "not gameplay" });
+  const validated = validateGameMetadata(valid);
   assert.deepEqual(validated, valid);
   assert.notEqual(validated, valid);
+  assert.throws(() => validateGameMetadata({ ...valid, ignoredSourceValue: "not gameplay" }), /ignoredSourceValue/);
   assert.throws(() => validateGameMetadata({ ...valid, cost: "1" }), /cost/);
   assert.throws(() => validateGameMetadata({ ...valid, value: Number.NaN }), /value/);
   assert.throws(() => validateGameMetadata({ ...valid, name: null }), /name/);

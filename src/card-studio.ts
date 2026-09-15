@@ -5,17 +5,8 @@ import { loadImage } from "@napi-rs/canvas";
 import type { CatalogCard } from "./catalog.ts";
 import { sha256 } from "./downloader.ts";
 import { classDirectory, snakeCase } from "./naming.ts";
-
-export interface CardGameMetadata {
-  id: string;
-  name: string;
-  class: string;
-  part: string;
-  cost: number | null;
-  value: number | null;
-  card_type: string;
-  description: string;
-}
+import { GAME_METADATA_SCHEMA_VERSION, parseGameMetadata, type CardGameMetadata } from "./game-metadata.ts";
+export type { CardGameMetadata } from "./game-metadata.ts";
 
 export interface CleanAssetState {
   available: boolean;
@@ -32,6 +23,8 @@ export interface CardStudioPaths {
 export interface LoadedGameMetadata {
   metadata: CardGameMetadata;
   status: "default" | "saved";
+  sourceSchemaVersion: 1 | 2 | null;
+  migrated: boolean;
 }
 
 const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -87,49 +80,20 @@ function localIdentity(card: CatalogCard): Pick<CardGameMetadata, "id" | "class"
 
 export function defaultGameMetadata(card: CatalogCard): CardGameMetadata {
   return {
+    schema_version: GAME_METADATA_SCHEMA_VERSION,
     ...localIdentity(card),
     name: card.name,
     cost: null,
     value: null,
     card_type: "",
-    description: ""
+    description: "",
+    targeting: { mode: "single_enemy" },
+    effects: []
   };
-}
-
-function requiredString(candidate: Record<string, unknown>, key: keyof CardGameMetadata, max: number): string {
-  const value = candidate[key];
-  if (typeof value !== "string" || value.length === 0 || value.length > max) {
-    throw new Error(`Invalid game metadata ${key}`);
-  }
-  return value;
-}
-
-function optionalNumber(candidate: Record<string, unknown>, key: "cost" | "value"): number | null {
-  const value = candidate[key];
-  if (value === null) return null;
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > 9999) {
-    throw new Error(`Invalid game metadata ${key}`);
-  }
-  return value;
 }
 
 export function validateGameMetadata(value: unknown): CardGameMetadata {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid game metadata");
-  const candidate = value as Record<string, unknown>;
-  return {
-    id: requiredString(candidate, "id", 200),
-    name: requiredString(candidate, "name", 200),
-    class: requiredString(candidate, "class", 100),
-    part: requiredString(candidate, "part", 100),
-    cost: optionalNumber(candidate, "cost"),
-    value: optionalNumber(candidate, "value"),
-    card_type: typeof candidate.card_type === "string" && candidate.card_type.length <= 100
-      ? candidate.card_type
-      : (() => { throw new Error("Invalid game metadata card_type"); })(),
-    description: typeof candidate.description === "string" && candidate.description.length <= 10_000
-      ? candidate.description
-      : (() => { throw new Error("Invalid game metadata description"); })()
-  };
+  return parseGameMetadata(value);
 }
 
 export function assertMetadataIdentity(metadata: CardGameMetadata, card: CatalogCard): void {
@@ -167,12 +131,14 @@ async function atomicWrite(path: string, bytes: Uint8Array | string): Promise<vo
 export async function loadGameMetadata(card: CatalogCard, root = "."): Promise<LoadedGameMetadata> {
   const path = cardStudioPaths(card, root).data;
   try {
-    const metadata = validateGameMetadata(JSON.parse(await readFile(path, "utf8")));
+    const document = JSON.parse(await readFile(path, "utf8")) as unknown;
+    const sourceSchemaVersion = document && typeof document === "object" && !Array.isArray(document) && (document as Record<string, unknown>).schema_version === 2 ? 2 : 1;
+    const metadata = validateGameMetadata(document);
     assertMetadataIdentity(metadata, card);
-    return { metadata, status: "saved" };
+    return { metadata, status: "saved", sourceSchemaVersion, migrated: sourceSchemaVersion === 1 };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { metadata: defaultGameMetadata(card), status: "default" };
+      return { metadata: defaultGameMetadata(card), status: "default", sourceSchemaVersion: null, migrated: false };
     }
     throw error;
   }

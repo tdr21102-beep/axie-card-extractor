@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-export const CARD_LAYOUT_VERSION = 1 as const;
+export const CARD_LAYOUT_VERSION = 2 as const;
 
 export type CardTextAlignment = "left" | "center" | "right";
 export type CardFontWeight = "normal" | "bold" | `${100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900}`;
@@ -11,6 +11,7 @@ export interface CardTextFieldLayout {
   y: number;
   width: number;
   font_size: number;
+  min_font_size: number;
   alignment: CardTextAlignment;
   max_lines: number;
   line_spacing: number;
@@ -25,6 +26,7 @@ export interface CardLayout {
   reference_width: number;
   reference_height: number;
   default_font_family: string;
+  font_asset: string | null;
   cost: CardTextFieldLayout;
   value: CardTextFieldLayout;
   name: CardTextFieldLayout;
@@ -106,6 +108,7 @@ function parseField(value: unknown, label: string): CardTextFieldLayout {
     y: requireFiniteNumber(field, "y", label, 0),
     width: requireFiniteNumber(field, "width", label, Number.EPSILON),
     font_size: requireFiniteNumber(field, "font_size", label, Number.EPSILON),
+    min_font_size: requireFiniteNumber(field, "min_font_size", label, Number.EPSILON),
     alignment: alignment as CardTextAlignment,
     max_lines: requireFiniteNumber(field, "max_lines", label, 1, true),
     line_spacing: requireFiniteNumber(field, "line_spacing", label, Number.EPSILON),
@@ -133,6 +136,14 @@ export function parseCardLayout(value: unknown): CardLayout {
   ) {
     throw new Error("layout.default_font_family must be a safe, non-empty font family");
   }
+  const fontAsset = root.font_asset;
+  const normalizedFontAsset = typeof fontAsset === "string" ? fontAsset.trim() : null;
+  if (fontAsset !== null && (typeof fontAsset !== "string" || normalizedFontAsset?.length === 0 || normalizedFontAsset === null || normalizedFontAsset.length > 260 || /[\u0000-\u001f]/u.test(fontAsset))) {
+    throw new Error("layout.font_asset must be null or a safe relative asset reference");
+  }
+  if (normalizedFontAsset !== null && (/^(?:[a-z]+:|[\\/]|[a-z]:)/iu.test(normalizedFontAsset) || normalizedFontAsset.split(/[\\/]/u).includes(".."))) {
+    throw new Error("layout.font_asset must stay within packaged assets");
+  }
 
   const fields = Object.fromEntries(
     FIELD_NAMES.map((fieldName) => [fieldName, parseField(root[fieldName], `layout.${fieldName}`)])
@@ -140,6 +151,9 @@ export function parseCardLayout(value: unknown): CardLayout {
 
   for (const fieldName of FIELD_NAMES) {
     const field = fields[fieldName];
+    if (field.min_font_size > field.font_size) {
+      throw new Error(`layout.${fieldName}.min_font_size must not exceed font_size`);
+    }
     if (field.x + field.width > referenceWidth) {
       throw new Error(`layout.${fieldName} exceeds reference_width`);
     }
@@ -154,6 +168,7 @@ export function parseCardLayout(value: unknown): CardLayout {
     reference_width: referenceWidth,
     reference_height: referenceHeight,
     default_font_family: defaultFontFamily.trim(),
+    font_asset: normalizedFontAsset,
     ...fields
   };
 }

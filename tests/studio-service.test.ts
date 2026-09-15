@@ -22,8 +22,12 @@ function cleanFixture(): Uint8Array {
 
 test("studio service integrates load, save, clean import, preview and rendered export", async () => {
   const root = await mkdtemp(join(tmpdir(), "axie-studio-service-"));
-  const source = toCatalogCard(card({ title: "Furball", slug: "furball", class: { _id: "beast", title: "Beast" }, part: { _id: "back", title: "Back" } }));
-  const service = createCardStudioService({ root, layoutPath: resolve("config/card_layout.json") });
+  const source = {
+    ...toCatalogCard(card({ title: "Furball", slug: "furball", class: { _id: "beast", title: "Beast" }, part: { _id: "back", title: "Back" } })),
+    image_size: null,
+    image_sha1: null
+  };
+  const service = createCardStudioService({ root, layoutPath: resolve("config/card_layout.json"), imageCache: join(root, "cache", "images") });
   const initial = await service.load(source);
   assert.equal(initial.metadataStatus, "default");
   assert.equal(initial.clean.available, false);
@@ -46,4 +50,34 @@ test("studio service integrates load, save, clean import, preview and rendered e
   assert.deepEqual(new Uint8Array(await readFile(imported.clean.path)), clean);
   const decoded = await loadImage(await readFile(exported.path));
   assert.deepEqual([decoded.width, decoded.height], [900, 1350]);
+});
+
+test("studio service exports original placeholder bytes without requiring a clean asset", async () => {
+  const root = await mkdtemp(join(tmpdir(), "axie-studio-placeholder-"));
+  const original = cleanFixture();
+  const source = {
+    ...toCatalogCard(card({ title: "Furball", slug: "furball", class: { _id: "beast", title: "Beast" }, part: { _id: "back", title: "Back" } })),
+    image_size: null,
+    image_sha1: null
+  };
+  const service = createCardStudioService({
+    root,
+    layoutPath: resolve("config/card_layout.json"),
+    imageCache: join(root, "cache", "images"),
+    fetchImpl: async () => new Response(Buffer.from(original), { status: 200 })
+  });
+  const metadata = {
+    ...defaultGameMetadata(source),
+    cost: 1,
+    value: 40,
+    card_type: "attack",
+    description: "Deal 2 hits.",
+    effects: [{ id: "damage_1", type: "damage" as const, target: "selected" as const, amount: 20, hits: 2 }]
+  };
+  const before = sha256(original);
+  const exported = await service.exportGameCard(source, metadata, "original", root);
+  assert.equal(exported.visual_source, "original_placeholder");
+  assert.deepEqual(new Uint8Array(await readFile(exported.image_path)), original);
+  assert.equal(sha256(original), before);
+  assert.equal(exported.document.effects[0]?.type, "damage");
 });

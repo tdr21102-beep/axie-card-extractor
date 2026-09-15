@@ -2,6 +2,7 @@ import type { CatalogCard } from "./catalog.ts";
 import type { BatchReport, ExportedCard, OutputLayout } from "./exporter.ts";
 import type { CatalogFilters } from "./filters.ts";
 import type { CardGameMetadata, CleanAssetState } from "./card-studio.ts";
+import type { GameCardExportResult, GameVisualSource } from "./game-card-exporter.ts";
 
 export const IPC = {
   catalogList: "catalog:list",
@@ -18,7 +19,8 @@ export const IPC = {
   studioSaveMetadata: "studio:save-metadata",
   studioImportClean: "studio:import-clean",
   studioRenderPreview: "studio:render-preview",
-  studioExportRendered: "studio:export-rendered"
+  studioExportRendered: "studio:export-rendered",
+  studioExportGameCard: "studio:export-game-card"
 } as const;
 
 export interface CatalogPayload {
@@ -49,6 +51,8 @@ export interface StudioCardPayload {
   source: CatalogCard;
   metadata: CardGameMetadata;
   metadataStatus: "default" | "saved";
+  metadataSourceSchemaVersion: 1 | 2 | null;
+  metadataMigrated: boolean;
   clean: CleanAssetState;
 }
 
@@ -61,13 +65,21 @@ export interface StudioPreviewPayload {
   dataUrl: string;
   sha256: string;
   cleanSha256: string;
+  warnings: string[];
 }
 
 export interface StudioExportPayload {
   path: string;
   sha256: string;
   cleanSha256: string;
+  warnings: string[];
 }
+
+export interface StudioGameExportRequest extends StudioMetadataRequest {
+  visualSource: GameVisualSource;
+}
+
+export type StudioGameExportPayload = GameCardExportResult;
 
 export interface DesktopApi {
   getCatalog(): Promise<CatalogPayload>;
@@ -85,6 +97,7 @@ export interface DesktopApi {
   importStudioClean(cardId: string): Promise<StudioCardPayload | null>;
   renderStudioPreview(request: StudioMetadataRequest): Promise<StudioPreviewPayload>;
   exportStudioRendered(request: StudioMetadataRequest): Promise<StudioExportPayload>;
+  exportStudioGameCard(request: StudioGameExportRequest): Promise<StudioGameExportPayload>;
 }
 
 declare global {

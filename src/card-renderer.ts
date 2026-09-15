@@ -6,6 +6,17 @@ import type { CardGameMetadata } from "./card-studio.ts";
 export interface RenderedCard {
   bytes: Uint8Array;
   sha256: string;
+  warnings: string[];
+}
+
+export class TextOverflowError extends Error {
+  readonly field: string;
+
+  constructor(field: string) {
+    super(`${field} does not fit within the configured minimum font size and maximum lines`);
+    this.name = "TextOverflowError";
+    this.field = field;
+  }
 }
 
 function splitLongToken(context: SKRSContext2D, token: string, width: number): string[] {
@@ -56,34 +67,37 @@ function wrapParagraph(context: SKRSContext2D, paragraph: string, width: number)
   return lines;
 }
 
-function truncateWithEllipsis(context: SKRSContext2D, value: string, width: number): string {
-  const ellipsis = "…";
-  if (context.measureText(ellipsis).width > width) {
-    return "";
-  }
-
-  let characters = Array.from(value.trimEnd());
-  while (characters.length > 0 && context.measureText(`${characters.join("")}${ellipsis}`).width > width) {
-    characters = characters.slice(0, -1);
-  }
-  return `${characters.join("").trimEnd()}${ellipsis}`;
-}
-
 function wrapText(
   context: SKRSContext2D,
   value: string,
-  width: number,
-  maxLines: number
+  width: number
 ): string[] {
   const normalized = value.replace(/\r\n?/gu, "\n");
-  const allLines = normalized.split("\n").flatMap((paragraph) => wrapParagraph(context, paragraph, width));
-  if (allLines.length <= maxLines) {
-    return allLines;
-  }
+  return normalized.split("\n").flatMap((paragraph) => wrapParagraph(context, paragraph, width));
+}
 
-  const visible = allLines.slice(0, maxLines);
-  visible[maxLines - 1] = truncateWithEllipsis(context, visible[maxLines - 1] ?? "", width);
-  return visible;
+export interface TextFitResult {
+  lines: string[];
+  fontSize: number;
+  reduced: boolean;
+}
+
+export function fitText(
+  context: SKRSContext2D,
+  value: string,
+  field: CardTextFieldLayout,
+  fontFamily: string,
+  fieldName = "text"
+): TextFitResult {
+  if (value === "") return { lines: [], fontSize: field.font_size, reduced: false };
+  for (let fontSize = field.font_size; fontSize >= field.min_font_size; fontSize -= 1) {
+    context.font = `${field.font_weight} ${fontSize}px "${fontFamily}"`;
+    const lines = wrapText(context, value, field.width);
+    if (lines.length <= field.max_lines) {
+      return { lines, fontSize, reduced: fontSize !== field.font_size };
+    }
+  }
+  throw new TextOverflowError(fieldName);
 }
 
 function textAnchor(field: CardTextFieldLayout): number {
@@ -100,10 +114,11 @@ function drawField(
   context: SKRSContext2D,
   value: string,
   field: CardTextFieldLayout,
-  fontFamily: string
-): void {
+  fontFamily: string,
+  fieldName: string
+): string | null {
   if (value === "") {
-    return;
+    return null;
   }
 
   context.save();
@@ -115,7 +130,8 @@ function drawField(
     field.font_size * field.line_spacing * field.max_lines
   );
   context.clip();
-  context.font = `${field.font_weight} ${field.font_size}px "${fontFamily}"`;
+  const fitted = fitText(context, value, field, fontFamily, fieldName);
+  context.font = `${field.font_weight} ${fitted.fontSize}px "${fontFamily}"`;
   context.textAlign = field.alignment;
   context.textBaseline = "top";
   context.fillStyle = field.color;
@@ -123,9 +139,9 @@ function drawField(
   context.lineWidth = field.stroke_width;
   context.lineJoin = "round";
 
-  const lines = wrapText(context, value, field.width, field.max_lines);
+  const lines = fitted.lines;
   const anchor = textAnchor(field);
-  const lineHeight = field.font_size * field.line_spacing;
+  const lineHeight = fitted.fontSize * field.line_spacing;
   for (const [index, line] of lines.entries()) {
     const y = field.y + index * lineHeight;
     if (field.stroke_width > 0) {
@@ -134,14 +150,18 @@ function drawField(
     context.fillText(line, anchor, y);
   }
   context.restore();
+  return fitted.reduced ? `${fieldName} font reduced from ${field.font_size}px to ${fitted.fontSize}px` : null;
 }
 
-function renderMetadata(context: SKRSContext2D, metadata: CardGameMetadata, layout: CardLayout): void {
-  drawField(context, metadata.cost === null ? "" : String(metadata.cost), layout.cost, layout.default_font_family);
-  drawField(context, metadata.value === null ? "" : String(metadata.value), layout.value, layout.default_font_family);
-  drawField(context, metadata.name, layout.name, layout.default_font_family);
-  drawField(context, metadata.card_type, layout.card_type, layout.default_font_family);
-  drawField(context, metadata.description, layout.description, layout.default_font_family);
+function renderMetadata(context: SKRSContext2D, metadata: CardGameMetadata, layout: CardLayout): string[] {
+  const warnings = [
+    drawField(context, metadata.cost === null ? "" : String(metadata.cost), layout.cost, layout.default_font_family, "cost"),
+    drawField(context, metadata.value === null ? "" : String(metadata.value), layout.value, layout.default_font_family, "value"),
+    drawField(context, metadata.name, layout.name, layout.default_font_family, "name"),
+    drawField(context, metadata.card_type, layout.card_type, layout.default_font_family, "card_type"),
+    drawField(context, metadata.description, layout.description, layout.default_font_family, "description")
+  ];
+  return warnings.filter((warning): warning is string => warning !== null);
 }
 
 export async function renderCard(
@@ -167,13 +187,14 @@ export async function renderCard(
 
   context.save();
   context.scale(cleanImage.width / layout.reference_width, cleanImage.height / layout.reference_height);
-  renderMetadata(context, metadata, layout);
+  const warnings = renderMetadata(context, metadata, layout);
   context.restore();
 
   const encoded = await canvas.encode("png");
   const bytes = Uint8Array.from(encoded);
   return {
     bytes,
-    sha256: createHash("sha256").update(bytes).digest("hex")
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    warnings
   };
 }

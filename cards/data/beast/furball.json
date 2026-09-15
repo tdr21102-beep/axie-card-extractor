@@ -1,4 +1,5 @@
 {
+  "schema_version": 2,
   "id": "furball",
   "name": "Furball",
   "class": "beast",
@@ -6,5 +7,17 @@
   "cost": 1,
   "value": 40,
   "card_type": "attack",
-  "description": "Deal 2 hits."
+  "description": "Deal 2 hits.",
+  "targeting": {
+    "mode": "single_enemy"
+  },
+  "effects": [
+    {
+      "id": "damage_1",
+      "type": "damage",
+      "target": "selected",
+      "amount": 20,
+      "hits": 2
+    }
+  ]
 }

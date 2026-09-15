@@ -1,14 +1,17 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createCanvas } from "@napi-rs/canvas";
 import electronPath from "electron";
 
-const screenshotPath = resolve("output/acceptance/gui/card_studio.png");
-const smokeRoot = resolve("output/acceptance/gui/studio_root");
+const screenshotPath = resolve("output/acceptance/gui_v2/card_studio.png");
+const smokeRoot = resolve("output/acceptance/gui_v2/studio_root");
+const exportRoot = resolve("output/acceptance/gui_v2/export_root");
 const cleanPath = resolve(smokeRoot, "cards/clean/beast/furball.png");
 const metadataPath = resolve(smokeRoot, "cards/data/beast/furball.json");
-const renderedPath = resolve(smokeRoot, "cards/rendered/beast/furball.png");
+const gameCardPath = resolve(exportRoot, "game_export/beast/furball/card.png");
+const gameMetadataPath = resolve(exportRoot, "game_export/beast/furball/card.json");
 await rm(`${screenshotPath}.json`, { force: true });
 await rm(screenshotPath, { force: true });
 await rm(`${screenshotPath}.stage`, { force: true });
@@ -37,6 +40,7 @@ const child = spawn(electronPath, ["."], {
     ...process.env,
     AXIE_GUI_SMOKE_OUTPUT: screenshotPath,
     AXIE_GUI_SMOKE_ROOT: smokeRoot,
+    AXIE_GUI_SMOKE_EXPORT_ROOT: exportRoot,
     ELECTRON_DISABLE_SECURITY_WARNINGS: "true"
   }
 });
@@ -47,7 +51,7 @@ const exitCode = await new Promise((resolveExit, reject) => {
     readFile(`${screenshotPath}.stage`, "utf8").catch(() => "not started").then((stage) => {
       reject(new Error(`Electron GUI smoke test timed out (stage: ${stage.trim()})`));
     });
-  }, 45_000);
+  }, 120_000);
   child.once("error", (error) => {
     clearTimeout(timeout);
     reject(error);
@@ -61,23 +65,31 @@ if (exitCode !== 0) throw new Error(`Electron exited with code ${exitCode}`);
 
 const report = JSON.parse(await readFile(`${screenshotPath}.json`, "utf8"));
 if (!report.ok) throw new Error(report.error ?? "Card Studio GUI smoke test failed");
-for (const expected of ["Card Catalog", "Batch Export", "Card Studio", "Card browser", "Furball", "Source Metadata", "Game Metadata", "Save Metadata", "Reset Unsaved Changes", "Export Rendered Card", "Clean ready"]) {
+for (const expected of ["Card Catalog", "Batch Export", "Card Studio", "Card browser", "Furball", "Source Metadata", "Game Metadata", "Gameplay", "Advanced JSON", "Add Effect", "Original / Placeholder", "Export Game Card", "Original placeholder"]) {
   if (!report.text.includes(expected)) throw new Error(`GUI smoke report is missing: ${expected}`);
 }
 const savedMetadata = JSON.parse(await readFile(metadataPath, "utf8"));
-if (savedMetadata.value !== 55 || savedMetadata.description !== "Deal 3 hits from GUI smoke.") {
-  throw new Error("GUI edits were not persisted through Save Metadata");
+if (savedMetadata.schema_version !== 2 || savedMetadata.effects?.[0]?.type !== "damage" || savedMetadata.effects[0].target !== "selected" || savedMetadata.effects[0].amount !== 20 || savedMetadata.effects[0].hits !== 3) {
+  throw new Error("V2 GUI effect edits were not persisted through Save Metadata");
 }
-await readFile(renderedPath);
-if (!report.initialPreviewHash || report.initialPreviewHash === report.editedPreviewHash) {
-  throw new Error("GUI edit did not update the rendered preview hash");
+if (report.amount !== "20" || report.initialHits !== "2" || report.editedHits !== "3") {
+  throw new Error("GUI did not demonstrate the Damage amount 20, Hits 2→3 flow");
+}
+const gamePng = await readFile(gameCardPath);
+const exportedMetadata = JSON.parse(await readFile(gameMetadataPath, "utf8"));
+const gamePngHash = createHash("sha256").update(gamePng).digest("hex");
+if (exportedMetadata.schema_version !== 2 || exportedMetadata.visual?.source !== "original_placeholder" || exportedMetadata.effects?.[0]?.hits !== 3) {
+  throw new Error("Export Game Card did not write the expected V2 placeholder package");
+}
+if (!report.originalPreviewHash || gamePngHash !== report.originalPreviewHash || exportedMetadata.visual.sha256 !== gamePngHash) {
+  throw new Error("Placeholder export did not preserve the original preview bytes/hash");
 }
 console.log(JSON.stringify({
   ok: true,
   screenshot: screenshotPath,
-  checked: ["three tabs", "Furball source/game metadata", "clean visual", "live 40→55 preview", "description preview", "save through UI", "rendered export through UI"],
-  initial_preview_sha256: report.initialPreviewHash,
-  edited_preview_sha256: report.editedPreviewHash,
+  checked: ["three existing tabs", "Furball V1→V2 migration notice", "Gameplay effect editor", "Damage amount 20", "Hits 2→3", "save/reload-compatible V2 JSON", "original placeholder mode", "Export Game Card through UI", "byte-identical placeholder hash"],
+  original_preview_sha256: report.originalPreviewHash,
   metadata: metadataPath,
-  rendered: renderedPath
+  game_card: gameCardPath,
+  game_metadata: gameMetadataPath
 }, null, 2));

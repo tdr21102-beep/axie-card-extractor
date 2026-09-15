@@ -2,6 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import type { CatalogCard } from "../src/catalog.ts";
 import type { BatchReport, OutputLayout } from "../src/exporter.ts";
 import { filterCatalog, type CatalogFilters } from "../src/filters.ts";
+import {
+  EFFECT_TYPES as GAME_EFFECT_TYPES,
+  TARGET_VOCABULARY,
+  addCardEffect,
+  deleteCardEffect,
+  duplicateCardEffect,
+  moveCardEffect,
+  parseAdvancedGameMetadata,
+  validateGameMetadataDocument
+} from "../src/game-metadata.ts";
 import type { BatchPlan, PreviewPayload, StudioCardPayload, StudioPreviewPayload } from "../src/ipc-contract.ts";
 
 const CLASSES = ["Aqua", "Beast", "Bird", "Bug", "Plant", "Reptile"];
@@ -222,21 +232,47 @@ function BatchTab({ cards, exportRoot, onChooseFolder }: {
 }
 
 type StudioMetadata = StudioCardPayload["metadata"];
+type StudioEffect = StudioMetadata["effects"][number];
+type EffectType = StudioEffect["type"];
+type TargetMode = StudioMetadata["targeting"]["mode"];
+type VisualSource = "original" | "rendered";
 
 function cloneStudioMetadata(metadata: StudioMetadata): StudioMetadata {
-  return { ...metadata };
+  return structuredClone(metadata);
 }
 
-function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChange: (dirty: boolean) => void }) {
+function replacementEffect(type: EffectType, id: string, target: TargetMode): StudioEffect {
+  switch (type) {
+    case "damage": return { id, type, target, amount: 1, hits: 1 };
+    case "heal": return { id, type, target, amount: 1 };
+    case "shield": return { id, type, target, amount: 1 };
+    case "buff": return { id, type, target, status: "status", stacks: 1, duration: 1 };
+    case "debuff": return { id, type, target, status: "status", stacks: 1, duration: 1 };
+    case "cleanse": return { id, type, target, count: 1 };
+  }
+}
+
+function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
+  cards: CatalogCard[];
+  exportRoot: string | null;
+  onChooseFolder(): Promise<string | null>;
+  onDirtyChange: (dirty: boolean) => void;
+}) {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [studioCard, setStudioCard] = useState<StudioCardPayload | null>(null);
   const [draft, setDraft] = useState<StudioMetadata | null>(null);
   const [saved, setSaved] = useState<StudioMetadata | null>(null);
   const [preview, setPreview] = useState<StudioPreviewPayload | null>(null);
+  const [originalPreview, setOriginalPreview] = useState<PreviewPayload | null>(null);
+  const [visualSource, setVisualSource] = useState<VisualSource>("original");
+  const [newEffectType, setNewEffectType] = useState<EffectType>("damage");
+  const [advancedText, setAdvancedText] = useState("");
+  const [advancedError, setAdvancedError] = useState<string | null>(null);
   const [loadingCard, setLoadingCard] = useState(false);
-  const [previewBusy, setPreviewBusy] = useState(false);
-  const [actionBusy, setActionBusy] = useState<"save" | "import" | "export" | null>(null);
+  const [renderBusy, setRenderBusy] = useState(false);
+  const [originalBusy, setOriginalBusy] = useState(false);
+  const [actionBusy, setActionBusy] = useState<"save" | "import" | "export" | "game-export" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isError, setIsError] = useState(false);
 
@@ -245,10 +281,13 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
     [cards, search]
   );
   const hasUnsavedChanges = useMemo(
-    () => Boolean(draft && saved && JSON.stringify(draft) !== JSON.stringify(saved)),
-    [draft, saved]
+    () => Boolean(draft && saved && (JSON.stringify(draft) !== JSON.stringify(saved) || advancedText !== JSON.stringify(draft, null, 2))),
+    [advancedText, draft, saved]
   );
-  const canSave = Boolean(studioCard && (studioCard.metadataStatus === "default" || hasUnsavedChanges));
+  const validation = useMemo(() => draft ? validateGameMetadataDocument(draft) : null, [draft]);
+  const previewBusy = visualSource === "original" ? originalBusy : renderBusy;
+  const shownPreview = visualSource === "original" ? originalPreview?.dataUrl : preview?.dataUrl;
+  const shownPreviewHash = visualSource === "original" ? originalPreview?.sha256 : preview?.sha256;
 
   useEffect(() => {
     onDirtyChange(hasUnsavedChanges);
@@ -275,6 +314,9 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
     setDraft(null);
     setSaved(null);
     setPreview(null);
+    setOriginalPreview(null);
+    setAdvancedText("");
+    setAdvancedError(null);
     setMessage(null);
     setIsError(false);
     if (!selectedId) return;
@@ -287,6 +329,8 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
         setStudioCard(payload);
         setDraft(cloneStudioMetadata(payload.metadata));
         setSaved(cloneStudioMetadata(payload.metadata));
+        setAdvancedText(JSON.stringify(payload.metadata, null, 2));
+        setVisualSource(payload.clean.available ? "rendered" : "original");
       })
       .catch((error) => {
         if (!active) return;
@@ -299,15 +343,44 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
   }, [selectedId]);
 
   useEffect(() => {
-    if (!selectedId || !draft || !studioCard?.clean.available) {
+    setOriginalPreview(null);
+    if (!selectedId || visualSource !== "original") {
+      setOriginalBusy(false);
+      return;
+    }
+
+    let active = true;
+    setOriginalBusy(true);
+    window.axieCards.loadPreview(selectedId)
+      .then((payload) => {
+        if (!active) return;
+        setOriginalPreview(payload);
+        setIsError(false);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setMessage(`Original placeholder could not be loaded. ${errorMessage(error)}`);
+        setIsError(true);
+      })
+      .finally(() => { if (active) setOriginalBusy(false); });
+
+    return () => { active = false; };
+  }, [selectedId, visualSource]);
+
+  useEffect(() => {
+    if (visualSource !== "rendered" || !selectedId || !draft || !studioCard?.clean.available) {
       setPreview(null);
-      setPreviewBusy(false);
+      setRenderBusy(false);
+      return;
+    }
+    if (validation?.status === "invalid") {
+      setRenderBusy(false);
       return;
     }
 
     let active = true;
     const timer = window.setTimeout(() => {
-      setPreviewBusy(true);
+      setRenderBusy(true);
       window.axieCards.renderStudioPreview({ cardId: selectedId, metadata: draft })
         .then((payload) => {
           if (!active) return;
@@ -320,19 +393,70 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
           setMessage(`Preview could not be rendered. ${errorMessage(error)}`);
           setIsError(true);
         })
-        .finally(() => { if (active) setPreviewBusy(false); });
+        .finally(() => { if (active) setRenderBusy(false); });
     }, 280);
 
     return () => {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [selectedId, draft, studioCard?.clean.available, studioCard?.clean.sha256]);
+  }, [selectedId, draft, studioCard?.clean.available, studioCard?.clean.sha256, validation?.status, visualSource]);
 
-  const updateDraft = <K extends keyof StudioMetadata>(key: K, value: StudioMetadata[K]) => {
-    setDraft((current) => current ? { ...current, [key]: value } : current);
+  const acceptDraft = (next: StudioMetadata, allowPendingAdvanced = false) => {
+    const serializedDraft = draft ? JSON.stringify(draft, null, 2) : "";
+    if (!allowPendingAdvanced && draft && advancedText !== serializedDraft && !window.confirm("Discard unapplied Advanced JSON and continue with the visual editor change?")) {
+      return false;
+    }
+    setDraft(next);
+    setAdvancedText(JSON.stringify(next, null, 2));
+    setAdvancedError(null);
     setMessage(null);
     setIsError(false);
+    return true;
+  };
+
+  const updateDraft = <K extends keyof StudioMetadata>(key: K, value: StudioMetadata[K]) => {
+    if (draft) acceptDraft({ ...draft, [key]: value });
+  };
+
+  const updateEffect = (index: number, patch: Record<string, unknown>) => {
+    if (!draft) return;
+    const effects = draft.effects.map((effect, effectIndex) => effectIndex === index ? { ...effect, ...patch } : effect) as StudioEffect[];
+    acceptDraft({ ...draft, effects });
+  };
+
+  const changeEffectType = (index: number, type: EffectType) => {
+    if (!draft) return;
+    const effects = draft.effects.map((effect, effectIndex) => effectIndex === index ? replacementEffect(type, effect.id, effect.target) : effect);
+    acceptDraft({ ...draft, effects });
+  };
+
+  const applyEffectOperation = (operation: () => StudioMetadata) => {
+    try {
+      acceptDraft(operation());
+    } catch (error) {
+      setMessage(`Effect operation could not be applied. Fix invalid fields first. ${errorMessage(error)}`);
+      setIsError(true);
+    }
+  };
+
+  const addEffect = () => {
+    if (draft) applyEffectOperation(() => addCardEffect(draft, newEffectType));
+  };
+
+  const applyAdvancedJson = () => {
+    if (!draft) return;
+    const parsed = parseAdvancedGameMetadata(advancedText, draft);
+    if (!parsed.ok) {
+      setAdvancedError(parsed.error);
+      return;
+    }
+    if (parsed.metadata.id !== draft.id || parsed.metadata.class !== draft.class || parsed.metadata.part !== draft.part) {
+      setAdvancedError("Advanced JSON cannot change id, class, or part for the selected source card.");
+      return;
+    }
+    acceptDraft(cloneStudioMetadata(parsed.metadata), true);
+    setMessage("Advanced JSON applied to the current draft. Save Metadata to persist it.");
   };
 
   const selectStudioCard = (cardId: string) => {
@@ -343,6 +467,11 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
 
   const saveMetadata = async () => {
     if (!selectedId || !draft) return;
+    if (advancedText !== JSON.stringify(draft, null, 2)) {
+      setAdvancedError("Apply or reset the pending Advanced JSON before saving.");
+      return;
+    }
+    if (validation?.status === "invalid") return;
     setActionBusy("save");
     setMessage(null);
     setIsError(false);
@@ -351,6 +480,7 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
       setStudioCard(payload);
       setDraft(cloneStudioMetadata(payload.metadata));
       setSaved(cloneStudioMetadata(payload.metadata));
+      setAdvancedText(JSON.stringify(payload.metadata, null, 2));
       setMessage("Game metadata saved. The JSON is now the source of truth for this card.");
     } catch (error) {
       setMessage(`Metadata could not be saved. Check the fields and try again. ${errorMessage(error)}`);
@@ -363,6 +493,8 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
   const resetMetadata = () => {
     if (!saved) return;
     setDraft(cloneStudioMetadata(saved));
+    setAdvancedText(JSON.stringify(saved, null, 2));
+    setAdvancedError(null);
     setMessage("Unsaved changes reset to the last saved or default metadata.");
     setIsError(false);
   };
@@ -370,6 +502,7 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
   const importClean = async () => {
     if (!selectedId) return;
     const currentDraft = draft ? cloneStudioMetadata(draft) : null;
+    const hasPendingAdvancedJson = Boolean(draft && advancedText !== JSON.stringify(draft, null, 2));
     setActionBusy("import");
     setMessage(null);
     setIsError(false);
@@ -381,8 +514,11 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
       }
       setStudioCard(payload);
       setSaved(cloneStudioMetadata(payload.metadata));
-      setDraft(currentDraft ?? cloneStudioMetadata(payload.metadata));
+      const nextDraft = currentDraft ?? cloneStudioMetadata(payload.metadata);
+      setDraft(nextDraft);
+      if (!hasPendingAdvancedJson) setAdvancedText(JSON.stringify(nextDraft, null, 2));
       setPreview(null);
+      setVisualSource("rendered");
       setMessage("Clean base imported. The original PNG remains unchanged while previews render separately.");
     } catch (error) {
       setMessage(`Clean base could not be imported. Select a readable PNG and try again. ${errorMessage(error)}`);
@@ -402,6 +538,31 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
       setMessage(`Rendered card exported to ${payload.path}.`);
     } catch (error) {
       setMessage(`Rendered card could not be exported. ${errorMessage(error)}`);
+      setIsError(true);
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
+  const exportGameCard = async () => {
+    if (!selectedId || !draft || validation?.status === "invalid") return;
+    if (advancedText !== JSON.stringify(draft, null, 2)) {
+      setAdvancedError("Apply or reset the pending Advanced JSON before exporting.");
+      return;
+    }
+    if (visualSource === "rendered" && !studioCard?.clean.available) return;
+    setActionBusy("game-export");
+    setMessage(null);
+    setIsError(false);
+    try {
+      if (!exportRoot && !await onChooseFolder()) {
+        setMessage("Game card export cancelled. Choose an export folder when you are ready.");
+        return;
+      }
+      const payload = await window.axieCards.exportStudioGameCard({ cardId: selectedId, metadata: draft, visualSource });
+      setMessage(payload.status === "skipped" ? `Identical game card package already exists at ${payload.directory}.` : `Game card package exported to ${payload.directory}.`);
+    } catch (error) {
+      setMessage(`Game card package could not be exported. ${errorMessage(error)}`);
       setIsError(true);
     } finally {
       setActionBusy(null);
@@ -441,12 +602,17 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
         ) : (
           <>
             <div className="panel-heading row studio-preview-heading">
-              <div><span className="eyebrow">Deterministic composition</span><h2>{draft.name || studioCard.source.name}</h2><p>Clean visual + current game metadata</p></div>
+              <div><span className="eyebrow">Visual source</span><h2>{draft.name || studioCard.source.name}</h2><p>{visualSource === "original" ? "Byte-preserving source placeholder" : "Clean visual + current game metadata"}</p></div>
               <span className={`status-pill ${studioCard.clean.available ? "ready" : "missing"}`}>{studioCard.clean.available ? "Clean ready" : "Clean missing"}</span>
             </div>
-            <div className={`studio-preview-frame ${!studioCard.clean.available ? "missing" : ""}`}>
-              {preview && <img src={preview.dataUrl} alt={`${draft.name || studioCard.source.name} rendered preview`} />}
-              {!studioCard.clean.available && (
+            <div className="visual-source-switch" role="group" aria-label="Visual Source">
+              <button className={visualSource === "original" ? "active" : ""} onClick={() => setVisualSource("original")}>Original / Placeholder</button>
+              <button className={visualSource === "rendered" ? "active" : ""} onClick={() => setVisualSource("rendered")}>Clean / Rendered</button>
+            </div>
+            {visualSource === "original" && <div className="visual-warning">Original placeholder — embedded text may not match Game Metadata</div>}
+            <div className={`studio-preview-frame ${visualSource === "rendered" && !studioCard.clean.available ? "missing" : ""}`}>
+              {shownPreview && <img src={shownPreview} alt={`${draft.name || studioCard.source.name} ${visualSource === "original" ? "original placeholder" : "rendered preview"}`} />}
+              {visualSource === "rendered" && !studioCard.clean.available && (
                 <div className="clean-missing">
                   <div className="card-glyph">◇</div>
                   <h3>Clean visual not available</h3>
@@ -454,13 +620,18 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
                   <button className="primary" disabled={actionBusy !== null} onClick={importClean}>{actionBusy === "import" ? "Importing…" : "Select / Import Clean Base PNG"}</button>
                 </div>
               )}
-              {studioCard.clean.available && !preview && !previewBusy && <div className="loading">Preview unavailable. Edit a field or import the clean base again.</div>}
+              {visualSource === "rendered" && studioCard.clean.available && !preview && !previewBusy && <div className="loading">Preview unavailable. Edit a field or import the clean base again.</div>}
+              {visualSource === "original" && !originalPreview && !previewBusy && <div className="loading">Original placeholder unavailable. Check the notice below and try again.</div>}
               {previewBusy && <div className="rendering-overlay"><div className="spinner" /><span>Rendering preview…</span></div>}
             </div>
             <div className="studio-preview-meta">
               <span><b>Clean SHA-256</b><code>{studioCard.clean.sha256 ?? "Available after import"}</code></span>
-              <span><b>Preview SHA-256</b><code>{preview?.sha256 ?? "Available after render"}</code></span>
+              <span><b>{visualSource === "original" ? "Original" : "Preview"} SHA-256</b><code>{shownPreviewHash ?? "Available after load"}</code></span>
             </div>
+            {visualSource === "rendered" && preview?.warnings.length ? <div className="render-warnings"><b>Renderer warnings</b>{preview.warnings.map((warning) => <span key={warning}>{warning}</span>)}</div> : null}
+            {!studioCard.clean.available && visualSource === "original" && (
+              <div className="clean-inline-missing"><span><b>Clean visual not available</b><small>Original remains usable as a temporary game visual.</small></span><button className="ghost" disabled={actionBusy !== null} onClick={importClean}>{actionBusy === "import" ? "Importing…" : "Select / Import Clean Base PNG"}</button></div>
+            )}
             {studioCard.clean.available && (
               <button className="ghost replace-clean" disabled={actionBusy !== null} onClick={importClean}>{actionBusy === "import" ? "Importing…" : "Replace Clean Base PNG"}</button>
             )}
@@ -483,7 +654,7 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
               <Meta label="Local name" value={studioCard.source.local_name} mono />
             </section>
             <section className="metadata-section game-metadata">
-              <div className="section-title"><div><span className="eyebrow">Editable JSON</span><h2>Game Metadata</h2></div><span className={`status-pill ${hasUnsavedChanges ? "missing" : "ready"}`}>{hasUnsavedChanges ? "Unsaved" : studioCard.metadataStatus === "saved" ? "Saved" : "Defaults"}</span></div>
+              <div className="section-title"><div><span className="eyebrow">Visual fields</span><h2>Game Metadata</h2></div><span className={`status-pill ${hasUnsavedChanges ? "missing" : "ready"}`}>{hasUnsavedChanges ? "Unsaved" : studioCard.metadataStatus === "saved" ? "Saved" : "Defaults"}</span></div>
               <div className="identity-note"><code>{draft.id}</code><span>{draft.class} • {draft.part}</span></div>
               <label className="field"><span>Name</span><input disabled={actionBusy !== null} value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} /></label>
               <div className="number-fields">
@@ -492,10 +663,44 @@ function StudioTab({ cards, onDirtyChange }: { cards: CatalogCard[]; onDirtyChan
               </div>
               <label className="field"><span>Card Type</span><input disabled={actionBusy !== null} list="studio-card-types" value={draft.card_type} placeholder="attack, skill, secret, power…" onChange={(event) => updateDraft("card_type", event.target.value)} /><datalist id="studio-card-types"><option value="attack" /><option value="skill" /><option value="secret" /><option value="power" /></datalist></label>
               <label className="field"><span>Description</span><textarea disabled={actionBusy !== null} rows={5} value={draft.description} placeholder="Visible card description" onChange={(event) => updateDraft("description", event.target.value)} /></label>
+            </section>
+            <section className="metadata-section gameplay-metadata">
+              <div className="section-title"><div><span className="eyebrow">Structured data</span><h2>Gameplay</h2></div><span className={`status-pill validation-${validation?.status ?? "invalid"}`}>{validation?.status === "valid" ? "Valid" : validation?.status === "warnings" ? "Warnings" : "Invalid"}</span></div>
+              <div className="schema-note"><span>Schema</span><code>v{draft.schema_version}</code></div>
+              {studioCard.metadataMigrated && <div className="migration-note">Loaded from V1 and migrated in memory. Save Metadata to persist schema_version 2.</div>}
+              <label className="field"><span>Targeting Mode</span><select disabled={actionBusy !== null} value={draft.targeting.mode} onChange={(event) => acceptDraft({ ...draft, targeting: { mode: event.target.value as TargetMode } })}>{TARGET_VOCABULARY.map((mode) => <option key={mode} value={mode}>{mode.replaceAll("_", " ")}</option>)}</select></label>
+              {validation?.issues.length ? <div className={`validation-issues ${validation.status}`}><b>{validation.status === "invalid" ? "Fix before saving" : "Review warnings"}</b>{validation.issues.map((issue, index) => <span key={`${issue.path}-${index}`}><code>{issue.path}</code>{issue.message}</span>)}</div> : null}
+              <div className="effects-heading"><div><h3>Effects</h3><small>Execution order is preserved.</small></div><span className="count-pill">{draft.effects.length}</span></div>
+              <div className="add-effect-row"><select disabled={actionBusy !== null} value={newEffectType} onChange={(event) => setNewEffectType(event.target.value as EffectType)}>{GAME_EFFECT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}</select><button className="ghost" disabled={actionBusy !== null} onClick={addEffect}>+ Add Effect</button></div>
+              <div className="effects-list">
+                {draft.effects.map((effect, index) => (
+                  <article className="effect-card" key={effect.id}>
+                    <div className="effect-card-heading"><div><span className="effect-order">{index + 1}</span><strong>{effect.type}</strong></div><code title={effect.id}>{effect.id}</code></div>
+                    <div className="effect-base-fields">
+                      <label className="field"><span>Type</span><select disabled={actionBusy !== null} value={effect.type} onChange={(event) => changeEffectType(index, event.target.value as EffectType)}>{GAME_EFFECT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
+                      <label className="field"><span>Target</span><select disabled={actionBusy !== null} value={effect.target} onChange={(event) => updateEffect(index, { target: event.target.value as TargetMode })}>{TARGET_VOCABULARY.map((target) => <option key={target} value={target}>{target.replaceAll("_", " ")}</option>)}</select></label>
+                    </div>
+                    {(effect.type === "damage" || effect.type === "heal" || effect.type === "shield") && <label className="field"><span>Amount</span><input disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.amount} onChange={(event) => updateEffect(index, { amount: Number(event.target.value) })} /></label>}
+                    {effect.type === "damage" && <label className="field"><span>Hits</span><input disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.hits} onChange={(event) => updateEffect(index, { hits: Number(event.target.value) })} /></label>}
+                    {(effect.type === "buff" || effect.type === "debuff") && <><label className="field"><span>Status</span><input disabled={actionBusy !== null} value={effect.status} placeholder="status key" onChange={(event) => updateEffect(index, { status: event.target.value })} /></label><div className="number-fields"><label className="field"><span>Stacks</span><input disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.stacks} onChange={(event) => updateEffect(index, { stacks: Number(event.target.value) })} /></label><label className="field"><span>Duration</span><input disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.duration} onChange={(event) => updateEffect(index, { duration: Number(event.target.value) })} /></label></div></>}
+                    {effect.type === "cleanse" && <label className="field"><span>Count</span><input disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.count} onChange={(event) => updateEffect(index, { count: Number(event.target.value) })} /></label>}
+                    <div className="effect-actions"><button className="ghost" disabled={actionBusy !== null || index === 0} onClick={() => applyEffectOperation(() => moveCardEffect(draft, index, "up"))}>Move Up</button><button className="ghost" disabled={actionBusy !== null || index === draft.effects.length - 1} onClick={() => applyEffectOperation(() => moveCardEffect(draft, index, "down"))}>Move Down</button><button className="ghost" disabled={actionBusy !== null} onClick={() => applyEffectOperation(() => duplicateCardEffect(draft, index))}>Duplicate</button><button className="ghost danger" disabled={actionBusy !== null} onClick={() => applyEffectOperation(() => deleteCardEffect(draft, index))}>Delete</button></div>
+                  </article>
+                ))}
+                {!draft.effects.length && <div className="effects-empty">No structured effects yet. Add one without changing the visible description.</div>}
+              </div>
+              <details className="advanced-json">
+                <summary>Advanced JSON</summary>
+                <p>Edit the complete V2 document. Changes are validated before replacing the current draft.</p>
+                <textarea spellCheck={false} value={advancedText} onChange={(event) => { setAdvancedText(event.target.value); setAdvancedError(null); }} />
+                {advancedError && <div className="advanced-error">{advancedError}</div>}
+                <button className="ghost" disabled={actionBusy !== null} onClick={applyAdvancedJson}>Apply JSON</button>
+              </details>
               <div className="studio-editor-actions">
-                <button className="primary" disabled={actionBusy !== null || !canSave} onClick={saveMetadata}>{actionBusy === "save" ? "Saving…" : "Save Metadata"}</button>
+                <button className="primary" disabled={actionBusy !== null || validation?.status === "invalid"} onClick={saveMetadata}>{actionBusy === "save" ? "Saving…" : "Save Metadata"}</button>
                 <button className="ghost" disabled={actionBusy !== null || !hasUnsavedChanges} onClick={resetMetadata}>Reset Unsaved Changes</button>
                 <button className="ghost export-rendered" disabled={actionBusy !== null || !studioCard.clean.available} onClick={exportRendered}>{actionBusy === "export" ? "Exporting…" : "Export Rendered Card"}</button>
+                <button className="ghost game-export" disabled={actionBusy !== null || validation?.status === "invalid" || (visualSource === "rendered" && !studioCard.clean.available)} onClick={exportGameCard}>{actionBusy === "game-export" ? "Exporting Game Card…" : "Export Game Card"}<small>{visualSource === "original" ? "Original placeholder + V2 JSON" : "Rendered PNG + V2 JSON"}</small></button>
               </div>
             </section>
           </>
@@ -548,7 +753,7 @@ export function App() {
       </header>
       <div className="subbar"><SourceBadge /><span className="folder-summary">Export: {exportRoot ?? "choose a folder when ready"}</span></div>
       {error && <div className="global-error"><b>Catalog unavailable</b><span>{error}</span><button onClick={refresh}>Try again</button></div>}
-      {loading ? <div className="app-loading"><div className="spinner" /><h2>Loading catalog metadata</h2><p>Using the local cache when available.</p></div> : tab === "catalog" ? <CatalogTab cards={cards} catalogCache={catalogCache} exportRoot={exportRoot} onChooseFolder={chooseFolder} /> : tab === "batch" ? <BatchTab cards={cards} exportRoot={exportRoot} onChooseFolder={chooseFolder} /> : <StudioTab cards={cards} onDirtyChange={setStudioDirty} />}
+      {loading ? <div className="app-loading"><div className="spinner" /><h2>Loading catalog metadata</h2><p>Using the local cache when available.</p></div> : tab === "catalog" ? <CatalogTab cards={cards} catalogCache={catalogCache} exportRoot={exportRoot} onChooseFolder={chooseFolder} /> : tab === "batch" ? <BatchTab cards={cards} exportRoot={exportRoot} onChooseFolder={chooseFolder} /> : <StudioTab cards={cards} exportRoot={exportRoot} onChooseFolder={chooseFolder} onDirtyChange={setStudioDirty} />}
     </main>
   );
 }
