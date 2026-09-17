@@ -98,7 +98,7 @@ Effects iniciales: `damage`, `heal`, `shield`, `buff`, `debuff` y `cleanse`. Tar
 
 ### Visual placeholder y game export
 
-**Visual Source** permite elegir `Original / Placeholder` o `Clean / Rendered`. El original se obtiene desde la misma capa RAW/cache y nunca recibe metadata superpuesta; la UI advierte que su texto horneado puede no coincidir con Game Metadata. Clean/Rendered conserva el renderer V1 desacoplado de `effects`.
+**Visual Source** permite elegir `Original / Placeholder` o `Clean Base / Rendered`. El original se obtiene desde la misma capa RAW/cache y nunca recibe metadata superpuesta; la UI advierte que su texto horneado puede no coincidir con Game Metadata. Clean Base/Rendered conserva el renderer desacoplado de `effects`.
 
 **Export Game Card** genera un paquete conflict-safe y determinista:
 
@@ -110,9 +110,19 @@ Effects iniciales: `damage`, `heal`, `shield`, `buff`, `debuff` y `cleanse`. Tar
 
 En modo placeholder, `card.png` es byte-identical al original. `card.json` contiene Game Metadata V2 y un bloque `visual` con source, filename y SHA-256. El contrato estable para un futuro importador Godot está documentado en `docs/game_card_schema.md`; este proyecto no modifica ni ejecuta Godot.
 
-El layout usa `config/card_layout.json` v2 con `min_font_size` y fitting determinista. Name y Description reducen la fuente hasta el mínimo configurado; si el texto importante aún no entra, el renderer devuelve un error explícito en vez de truncarlo silenciosamente. `config/card_types.json` prepara labels, style keys y referencias futuras a iconos sin descargar assets. `assets/fonts/` reserva el slot para una fuente empaquetada futura.
+El layout usa `config/card_layout.json` v2 en espacio lógico master 1024×1536 (2:3), con `height`, alineación vertical, `max_width`, `min_font_size` y fitting determinista. Assets legacy 2:3 siguen siendo compatibles y conservan sus dimensiones de salida. Name y Description reducen la fuente hasta el mínimo configurado; si el texto importante aún no entra, el renderer devuelve un error explícito en vez de truncarlo silenciosamente. `card_type_display` permite mapear el tipo gameplay a una etiqueta visible sin modificar metadata. `config/card_types.json` prepara style keys y referencias futuras a iconos sin descargar assets. `assets/fonts/` reserva el slot para una fuente empaquetada futura; si falta, se usa la familia fallback configurada.
 
 No existe integración con OpenAI, OCR ni borrado automático. El almacenamiento clean queda desacoplado para que una iteración futura pueda producir ese input con otro proveedor sin cambiar metadata ni renderer.
+
+### Production Editor V3
+
+Card Studio V3 agrega organización de producción sin duplicar ni alterar la identidad del catálogo. Los Card Sets versionados viven en `cards/sets/<set_id>.json`; contienen referencias al ID estable de catálogo y Axie Slots arbitrarios (`axie_01`, `axie_02`, etc.). Una carta puede pertenecer a varios sets, pero su Game Metadata continúa siendo única por carta.
+
+El browser combina búsqueda con filtros por set, slot, clase, parte, estado derivado, effects, clean y Game Ready. Los estados `UNCONFIGURED`, `DRAFT`, `VALID` y `GAME_READY` se calculan en backend a partir del JSON confirmado, la validación V2 y las fuentes visuales realmente disponibles. Original/Placeholder es exportable desde la fuente; Clean/Rendered solo se habilita cuando existe un clean PNG real. Reemplazar el clean invalida el render derivado anterior.
+
+El flujo incluye Previous/Next, Save & Next, Undo/Redo de sesión, Copy/Paste Gameplay limitado a `targeting` y `effects`, y recuperación de borradores. Los drafts se escriben atómicamente en `cards/drafts/<class>/<card_id>.json`; nunca confirman metadata ni modifican RAW por sí solos, y al reabrir se ofrecen Restore o Discard.
+
+**Export Game Set** produce `game_export/<set_id>/manifest.json`, reportes versionados y paquetes por carta bajo `cards/<class>/<card_id>/`. El manifest solo usa paths POSIX relativos, hashes SHA-256 y orden determinista. Una exportación completa bloqueada hace preflight sin escribir; la opción explícita Game Ready only registra `success`, `failed` y `skipped` por carta.
 
 ## Fuente y cache
 
@@ -157,7 +167,7 @@ Para ejecutar los casos reales de aceptación del catálogo, Teal Shell, Cucumbe
 npm run acceptance
 ```
 
-`npm run acceptance` ejecuta las regresiones del extractor, el flujo V1 y la aceptación Furball V2. También pueden ejecutarse por separado con `npm run acceptance:extractor`, `npm run acceptance:studio` y `npm run acceptance:studio-v2`. Los outputs quedan bajo `output/acceptance/` y son regenerables.
+`npm run acceptance` ejecuta las regresiones del extractor, el flujo V1, Furball V2 y First Battle Set V3. También pueden ejecutarse por separado con `npm run acceptance:extractor`, `npm run acceptance:studio`, `npm run acceptance:studio-v2` y `npm run acceptance:studio-v3`. Los outputs quedan bajo `output/acceptance/` y son regenerables.
 
 La aceptación de GUI abre Electron empaquetado localmente, entra a Card Studio, selecciona Furball y captura el editor:
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -10,10 +10,10 @@ import { sha256 } from "../src/downloader.ts";
 import { createCardStudioService } from "../src/studio-service.ts";
 import { card } from "./fixtures.ts";
 
-function cleanFixture(): Uint8Array {
+function cleanFixture(background = "#ead6a5"): Uint8Array {
   const canvas = createCanvas(900, 1350);
   const context = canvas.getContext("2d", { alpha: true });
-  context.fillStyle = "#ead6a5";
+  context.fillStyle = background;
   context.fillRect(45, 45, 810, 1260);
   context.fillStyle = "#27455a";
   context.fillRect(110, 165, 680, 760);
@@ -50,6 +50,20 @@ test("studio service integrates load, save, clean import, preview and rendered e
   assert.deepEqual(new Uint8Array(await readFile(imported.clean.path)), clean);
   const decoded = await loadImage(await readFile(exported.path));
   assert.deepEqual([decoded.width, decoded.height], [900, 1350]);
+
+  const replacementPath = join(root, "furball-clean-replacement.png");
+  await writeFile(replacementPath, cleanFixture("#d7e4ec"));
+  await service.importClean(source, replacementPath, true);
+  await assert.rejects(readFile(exported.path), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+
+  const renderedAgain = await service.exportRendered(source, metadata);
+  const committedClean = await readFile(imported.clean.path);
+  await rm(renderedAgain.path, { force: true });
+  await mkdir(renderedAgain.path);
+  const blockedReplacementPath = join(root, "furball-clean-blocked-replacement.png");
+  await writeFile(blockedReplacementPath, cleanFixture("#f2c8c8"));
+  await assert.rejects(service.importClean(source, blockedReplacementPath, true));
+  assert.deepEqual(await readFile(imported.clean.path), committedClean, "clean replacement must not commit when rendered invalidation fails");
 });
 
 test("studio service exports original placeholder bytes without requiring a clean asset", async () => {
@@ -80,4 +94,39 @@ test("studio service exports original placeholder bytes without requiring a clea
   assert.deepEqual(new Uint8Array(await readFile(exported.image_path)), original);
   assert.equal(sha256(original), before);
   assert.equal(exported.document.effects[0]?.type, "damage");
+});
+
+test("studio service reloads layout from disk and retains the last valid layout after invalid edits", async () => {
+  const root = await mkdtemp(join(tmpdir(), "axie-studio-layout-reload-"));
+  const layoutPath = join(root, "card_layout.json");
+  const originalLayout = JSON.parse(await readFile(resolve("config/card_layout.json"), "utf8")) as { name: { x: number } };
+  await writeFile(layoutPath, JSON.stringify(originalLayout));
+  const source = {
+    ...toCatalogCard(card({ title: "Furball", slug: "furball", class: { _id: "beast", title: "Beast" }, part: { _id: "back", title: "Back" } })),
+    image_size: null,
+    image_sha1: null
+  };
+  const clean = cleanFixture();
+  const cleanPath = join(root, "furball-clean.png");
+  await writeFile(cleanPath, clean);
+  const service = createCardStudioService({ root, layoutPath, imageCache: join(root, "cache", "images") });
+  const imported = await service.importClean(source, cleanPath);
+  const metadata = { ...defaultGameMetadata(source), name: "Reloaded Layout", value: 30 };
+  const before = await service.render(source, metadata);
+
+  originalLayout.name.x += 40;
+  await writeFile(layoutPath, JSON.stringify(originalLayout));
+  const reloaded = service.reloadLayout();
+  assert.equal(reloaded.name.x, originalLayout.name.x);
+  const after = await service.render(source, metadata);
+  assert.notEqual(after.sha256, before.sha256);
+  assert.deepEqual(new Uint8Array(await readFile(imported.clean.path)), clean);
+
+  await writeFile(layoutPath, "{ invalid json");
+  assert.throws(() => service.reloadLayout(), /Unexpected token|JSON|layout/i);
+  const retained = await service.render(source, metadata);
+  assert.equal(retained.sha256, after.sha256);
+  assert.deepEqual(new Uint8Array(await readFile(imported.clean.path)), clean);
+  assert.deepEqual(metadata, { ...defaultGameMetadata(source), name: "Reloaded Layout", value: 30 });
+  await rm(root, { recursive: true, force: true });
 });

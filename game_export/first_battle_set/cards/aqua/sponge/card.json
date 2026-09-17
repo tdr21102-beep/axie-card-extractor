@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "id": "sponge",
+  "name": "Sponge",
+  "class": "aqua",
+  "part": "back",
+  "cost": 1,
+  "value": 60,
+  "card_type": "secret",
+  "description": "",
+  "targeting": {
+    "mode": "single_enemy"
+  },
+  "effects": [],
+  "package_schema_version": 1,
+  "visual": {
+    "source": "original_placeholder",
+    "file": "card.png",
+    "sha256": "b5bc80215934d7dac2a53432ba76619c37b8c4f0d17a34b4b8ef16ce035a7c4b",
+    "warning": "Embedded text may not match Game Metadata"
+  }
+}

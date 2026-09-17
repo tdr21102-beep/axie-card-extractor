@@ -116,6 +116,15 @@ export interface GameMetadataValidationResult {
   metadata: CardGameMetadata | null;
 }
 
+/**
+ * Gameplay requirements are intentionally keyed by card type rather than
+ * applied globally. Visual metadata may be complete while gameplay remains a
+ * draft, and future card types can define different requirements here.
+ */
+export const CARD_TYPE_GAMEPLAY_REQUIREMENTS: Readonly<Record<string, { minEffects: number }>> = {
+  attack: { minEffects: 1 }
+};
+
 export type AdvancedJsonParseResult =
   | {
       ok: true;
@@ -305,6 +314,39 @@ export function cloneGameMetadata(metadata: CardGameMetadata): CardGameMetadata 
     targeting: { ...metadata.targeting },
     effects: metadata.effects.map(cloneEffect)
   };
+}
+
+export function gameMetadataReadinessIssues(metadata: CardGameMetadata): GameMetadataValidationIssue[] {
+  const requirement = CARD_TYPE_GAMEPLAY_REQUIREMENTS[metadata.card_type.trim().toLowerCase()];
+  if (!requirement || metadata.effects.length >= requirement.minEffects) return [];
+  return [{
+    path: "effects",
+    message: "Attack card requires at least one gameplay effect.",
+    severity: "error"
+  }];
+}
+
+/**
+ * Validate the schema and card-type gameplay requirements for game readiness.
+ * The regular V2 validator remains schema-only so structurally valid drafts
+ * (including an unfinished Attack) can still be saved and edited.
+ */
+export function validateGameMetadataForGameReady(value: unknown): GameMetadataValidationResult {
+  const validation = validateGameMetadataV2(value);
+  if (validation.metadata === null || validation.status === "invalid") return validation;
+  const issues = [...validation.issues, ...gameMetadataReadinessIssues(validation.metadata)];
+  return {
+    status: issues.some((issue) => issue.severity === "error")
+      ? "invalid"
+      : issues.length > 0 ? "warnings" : "valid",
+    issues,
+    metadata: issues.some((issue) => issue.severity === "error") ? null : validation.metadata
+  };
+}
+
+export function assertGameMetadataGameReady(metadata: CardGameMetadata): void {
+  const issues = gameMetadataReadinessIssues(metadata);
+  if (issues.some((issue) => issue.severity === "error")) throw new GameMetadataValidationError(issues);
 }
 
 export function validateGameMetadataV2(value: unknown): GameMetadataValidationResult {

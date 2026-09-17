@@ -4,15 +4,21 @@ import { resolve } from "node:path";
 export const CARD_LAYOUT_VERSION = 2 as const;
 
 export type CardTextAlignment = "left" | "center" | "right";
+export type CardTextVerticalAlignment = "top" | "middle" | "bottom";
 export type CardFontWeight = "normal" | "bold" | `${100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900}`;
 
 export interface CardTextFieldLayout {
   x: number;
   y: number;
   width: number;
+  /** Optional text box height. Legacy layouts default to their fitted line box. */
+  height: number;
   font_size: number;
   min_font_size: number;
   alignment: CardTextAlignment;
+  vertical_alignment: CardTextVerticalAlignment;
+  /** Optional cap for text measurement/wrapping, independent of the box width. */
+  max_width: number | null;
   max_lines: number;
   line_spacing: number;
   color: string;
@@ -27,6 +33,8 @@ export interface CardLayout {
   reference_height: number;
   default_font_family: string;
   font_asset: string | null;
+  /** Display labels for gameplay card_type values; unmapped values are shown as-is. */
+  card_type_display: Record<string, string>;
   cost: CardTextFieldLayout;
   value: CardTextFieldLayout;
   name: CardTextFieldLayout;
@@ -37,6 +45,7 @@ export interface CardLayout {
 const DEFAULT_LAYOUT_PATH = resolve("config/card_layout.json");
 const FIELD_NAMES = ["cost", "value", "name", "card_type", "description"] as const;
 const ALIGNMENTS = new Set<CardTextAlignment>(["left", "center", "right"]);
+const VERTICAL_ALIGNMENTS = new Set<CardTextVerticalAlignment>(["top", "middle", "bottom"]);
 const FONT_WEIGHTS = new Set<CardFontWeight>([
   "normal",
   "bold",
@@ -95,6 +104,9 @@ function parseField(value: unknown, label: string): CardTextFieldLayout {
   const field = requireRecord(value, label);
   const alignment = field.alignment;
   const fontWeight = field.font_weight;
+  const verticalAlignment = field.vertical_alignment ?? "top";
+  const height = field.height ?? undefined;
+  const maxWidth = field.max_width ?? null;
 
   if (typeof alignment !== "string" || !ALIGNMENTS.has(alignment as CardTextAlignment)) {
     throw new Error(`${label}.alignment must be left, center, or right`);
@@ -102,16 +114,32 @@ function parseField(value: unknown, label: string): CardTextFieldLayout {
   if (typeof fontWeight !== "string" || !FONT_WEIGHTS.has(fontWeight as CardFontWeight)) {
     throw new Error(`${label}.font_weight must be normal, bold, or a weight from 100 to 900`);
   }
+  if (typeof verticalAlignment !== "string" || !VERTICAL_ALIGNMENTS.has(verticalAlignment as CardTextVerticalAlignment)) {
+    throw new Error(`${label}.vertical_alignment must be top, middle, or bottom`);
+  }
+  if (height !== undefined && (typeof height !== "number" || !Number.isFinite(height) || height < Number.EPSILON)) {
+    throw new Error(`${label}.height must be a finite number > 0`);
+  }
+  if (maxWidth !== null && (typeof maxWidth !== "number" || !Number.isFinite(maxWidth) || maxWidth < Number.EPSILON)) {
+    throw new Error(`${label}.max_width must be null or a finite number > 0`);
+  }
+
+  const fontSize = requireFiniteNumber(field, "font_size", label, Number.EPSILON);
+  const lineSpacing = requireFiniteNumber(field, "line_spacing", label, Number.EPSILON);
+  const maxLines = requireFiniteNumber(field, "max_lines", label, 1, true);
 
   return {
     x: requireFiniteNumber(field, "x", label, 0),
     y: requireFiniteNumber(field, "y", label, 0),
     width: requireFiniteNumber(field, "width", label, Number.EPSILON),
-    font_size: requireFiniteNumber(field, "font_size", label, Number.EPSILON),
+    height: height ?? fontSize * lineSpacing * maxLines,
+    font_size: fontSize,
     min_font_size: requireFiniteNumber(field, "min_font_size", label, Number.EPSILON),
     alignment: alignment as CardTextAlignment,
-    max_lines: requireFiniteNumber(field, "max_lines", label, 1, true),
-    line_spacing: requireFiniteNumber(field, "line_spacing", label, Number.EPSILON),
+    vertical_alignment: verticalAlignment as CardTextVerticalAlignment,
+    max_width: maxWidth,
+    max_lines: maxLines,
+    line_spacing: lineSpacing,
     color: requireColor(field, "color", label),
     stroke_color: requireColor(field, "stroke_color", label),
     stroke_width: requireFiniteNumber(field, "stroke_width", label, 0),
@@ -145,6 +173,17 @@ export function parseCardLayout(value: unknown): CardLayout {
     throw new Error("layout.font_asset must stay within packaged assets");
   }
 
+  const cardTypeDisplayValue = root.card_type_display ?? {};
+  if (!isRecord(cardTypeDisplayValue)) throw new Error("layout.card_type_display must be an object");
+  const cardTypeDisplay: Record<string, string> = {};
+  for (const [key, label] of Object.entries(cardTypeDisplayValue)) {
+    if (!/^[a-z][a-z0-9_]*$/u.test(key)) throw new Error(`layout.card_type_display.${key} must be a snake_case key`);
+    if (typeof label !== "string" || label.trim().length === 0 || label.length > 100 || /[\u0000-\u001f]/u.test(label)) {
+      throw new Error(`layout.card_type_display.${key} must be a safe non-empty label`);
+    }
+    cardTypeDisplay[key] = label.trim();
+  }
+
   const fields = Object.fromEntries(
     FIELD_NAMES.map((fieldName) => [fieldName, parseField(root[fieldName], `layout.${fieldName}`)])
   ) as Record<(typeof FIELD_NAMES)[number], CardTextFieldLayout>;
@@ -157,7 +196,10 @@ export function parseCardLayout(value: unknown): CardLayout {
     if (field.x + field.width > referenceWidth) {
       throw new Error(`layout.${fieldName} exceeds reference_width`);
     }
-    const fieldBottom = field.y + field.font_size * field.line_spacing * field.max_lines;
+    if (field.max_width !== null && field.max_width > field.width) {
+      throw new Error(`layout.${fieldName}.max_width must not exceed width`);
+    }
+    const fieldBottom = field.y + field.height;
     if (fieldBottom > referenceHeight) {
       throw new Error(`layout.${fieldName} exceeds reference_height`);
     }
@@ -169,6 +211,7 @@ export function parseCardLayout(value: unknown): CardLayout {
     reference_height: referenceHeight,
     default_font_family: defaultFontFamily.trim(),
     font_asset: normalizedFontAsset,
+    card_type_display: cardTypeDisplay,
     ...fields
   };
 }

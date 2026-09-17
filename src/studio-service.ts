@@ -5,6 +5,7 @@ import type { CatalogCard } from "./catalog.ts";
 import { acquireCardImage } from "./downloader.ts";
 import { exportGameCardPackage, type GameVisualSource } from "./game-card-exporter.ts";
 import {
+  assertValidPng,
   assertMetadataIdentity,
   cardStudioPaths,
   getCleanAssetState,
@@ -13,7 +14,7 @@ import {
   saveGameMetadata,
   type CardGameMetadata
 } from "./card-studio.ts";
-import { parseGameMetadata } from "./game-metadata.ts";
+import { assertGameMetadataGameReady, parseGameMetadata } from "./game-metadata.ts";
 import { loadCardLayout } from "./card-layout.ts";
 import { renderCard } from "./card-renderer.ts";
 
@@ -40,7 +41,16 @@ async function atomicReplace(path: string, bytes: Uint8Array): Promise<void> {
 }
 
 export function createCardStudioService(options: CardStudioServiceOptions) {
-  const layout = loadCardLayout(options.layoutPath);
+  // Keep the active layout in service state. Reload parses a fresh disk copy
+  // and only swaps it after validation succeeds, preserving the last good
+  // renderer configuration when an editor has a malformed intermediate file.
+  let layout = loadCardLayout(options.layoutPath);
+
+  const reloadLayout = () => {
+    const nextLayout = loadCardLayout(options.layoutPath);
+    layout = nextLayout;
+    return nextLayout;
+  };
 
   const load = async (card: CatalogCard) => {
     const [stored, clean] = await Promise.all([
@@ -63,6 +73,23 @@ export function createCardStudioService(options: CardStudioServiceOptions) {
   };
 
   const importClean = async (card: CatalogCard, sourcePath: string, replace = false) => {
+    const paths = cardStudioPaths(card, options.root);
+    const sourceBytes = await readFile(sourcePath);
+    await assertValidPng(sourceBytes);
+    let existing: Buffer | null = null;
+    try {
+      existing = await readFile(paths.clean);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (existing?.equals(sourceBytes)) return load(card);
+    if (existing && !replace) {
+      throw new Error(`Clean asset conflict: ${paths.clean} already exists with different contents`);
+    }
+    // Invalidate the derived render before committing a different clean base.
+    // If Windows cannot remove it (for example because it is locked), the
+    // existing clean stays committed and the replacement fails safely.
+    await rm(paths.rendered, { force: true });
     await importCleanBase(card, sourcePath, { root: options.root, replace });
     return load(card);
   };
@@ -87,6 +114,10 @@ export function createCardStudioService(options: CardStudioServiceOptions) {
   const exportGameCard = async (card: CatalogCard, metadata: CardGameMetadata, visualSource: GameVisualSource, exportRoot: string) => {
     const validated = parseGameMetadata(metadata);
     assertMetadataIdentity(validated, card);
+    // Block invalid gameplay before fetching a source image or rendering. Draft
+    // metadata remains saveable, but only explicitly configured gameplay can be
+    // published as a game card.
+    assertGameMetadataGameReady(validated);
     let imageBytes: Uint8Array;
     if (visualSource === "original") {
       imageBytes = (await acquireCardImage(card, {
@@ -101,5 +132,14 @@ export function createCardStudioService(options: CardStudioServiceOptions) {
     return exportGameCardPackage({ card, metadata: validated, visualSource, imageBytes, exportRoot });
   };
 
-  return { load, saveMetadata, importClean, render, exportRendered, exportGameCard, layout };
+  return {
+    load,
+    saveMetadata,
+    importClean,
+    render,
+    exportRendered,
+    exportGameCard,
+    reloadLayout,
+    get layout() { return layout; }
+  };
 }

@@ -1,0 +1,30 @@
+{
+  "schema_version": 2,
+  "id": "koi",
+  "name": "Koi",
+  "class": "aqua",
+  "part": "tail",
+  "cost": 1,
+  "value": 100,
+  "card_type": "attack",
+  "description": "Deal 40% of damage as SPLASH DAMAGE",
+  "targeting": {
+    "mode": "single_enemy"
+  },
+  "effects": [
+    {
+      "id": "damage_1",
+      "type": "damage",
+      "target": "all_enemies",
+      "amount": 18,
+      "hits": 1
+    }
+  ],
+  "package_schema_version": 1,
+  "visual": {
+    "source": "original_placeholder",
+    "file": "card.png",
+    "sha256": "8e28ecc769a4a4eb78ccbe696870c8224002910e4edf9ab6b52d77a5ccb23373",
+    "warning": "Embedded text may not match Game Metadata"
+  }
+}

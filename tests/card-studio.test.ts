@@ -19,11 +19,11 @@ import { sha256 } from "../src/downloader.ts";
 import { card } from "./fixtures.ts";
 
 const catalogCard = () => toCatalogCard(card());
-function pngFixture(fill: string): Uint8Array {
-  const canvas = createCanvas(8, 8);
+function pngFixture(fill: string, width = 8, height = 8): Uint8Array {
+  const canvas = createCanvas(width, height);
   const context = canvas.getContext("2d");
   context.fillStyle = fill;
-  context.fillRect(0, 0, 8, 8);
+  context.fillRect(0, 0, width, height);
   return new Uint8Array(canvas.toBuffer("image/png"));
 }
 
@@ -131,7 +131,10 @@ test("missing clean state retains its target path", async () => {
   assert.deepEqual(await getCleanAssetState(source, root), {
     available: false,
     path: cardStudioPaths(source, root).clean,
-    sha256: null
+    sha256: null,
+    width: null,
+    height: null,
+    compatibility: null
   });
 });
 
@@ -142,6 +145,9 @@ test("clean import preserves bytes and hash and rejects non-PNG input", async ()
   const state = await importCleanBase(catalogCard(), sourcePath, { root });
   assert.equal(state.available, true);
   assert.equal(state.sha256, sha256(png));
+  assert.equal(state.width, 8);
+  assert.equal(state.height, 8);
+  assert.equal(state.compatibility, "legacy");
   assert.deepEqual(new Uint8Array(await readFile(state.path)), png);
   assert.deepEqual(await getCleanAssetState(catalogCard(), root), state);
   const invalid = join(root, "invalid.png");
@@ -150,6 +156,23 @@ test("clean import preserves bytes and hash and rejects non-PNG input", async ()
   const truncated = join(root, "truncated.png");
   await writeFile(truncated, new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]));
   await assert.rejects(importCleanBase(catalogCard(), truncated, { root }), /complete PNG|decodable PNG/);
+});
+
+test("clean import classifies the 1024x1536 master without changing bytes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "axie-studio-master-"));
+  const sourcePath = join(root, "catfish-clean.png");
+  const master = pngFixture("#126b8c", 1024, 1536);
+  await writeFile(sourcePath, master);
+  const state = await importCleanBase(catalogCard(), sourcePath, { root });
+  assert.deepEqual(state, {
+    available: true,
+    path: cardStudioPaths(catalogCard(), root).clean,
+    sha256: sha256(master),
+    width: 1024,
+    height: 1536,
+    compatibility: "master"
+  });
+  assert.deepEqual(new Uint8Array(await readFile(state.path)), master);
 });
 
 test("clean import is conflict-safe and replacement is explicit", async () => {

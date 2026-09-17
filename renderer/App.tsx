@@ -1,7 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CatalogCard } from "../src/catalog.ts";
 import type { BatchReport, OutputLayout } from "../src/exporter.ts";
 import { filterCatalog, type CatalogFilters } from "../src/filters.ts";
+import {
+  adjacentCardId,
+  copyGameplay as copyGameplayData,
+  createEditorHistory,
+  pasteGameplay as pasteGameplayData,
+  pushEditorHistory,
+  redoEditorHistory,
+  undoEditorHistory,
+  type EditorHistory
+} from "../src/editor-session.ts";
+import { filterProductionCards, type ProductionFilterScope } from "../src/production-filters.ts";
 import {
   EFFECT_TYPES as GAME_EFFECT_TYPES,
   TARGET_VOCABULARY,
@@ -13,6 +24,13 @@ import {
   validateGameMetadataDocument
 } from "../src/game-metadata.ts";
 import type { BatchPlan, PreviewPayload, StudioCardPayload, StudioPreviewPayload } from "../src/ipc-contract.ts";
+import type {
+  CardSetDocument,
+  GameSetExportResult,
+  ProductionDashboard,
+  ProductionStatus,
+  StudioDraftDocument
+} from "../src/production-contract.ts";
 
 const CLASSES = ["Aqua", "Beast", "Bird", "Bug", "Plant", "Reptile"];
 const PARTS = ["Eyes", "Ears", "Mouth", "Horn", "Back", "Tail"];
@@ -252,6 +270,32 @@ function replacementEffect(type: EffectType, id: string, target: TargetMode): St
   }
 }
 
+type ProductionScope = ProductionFilterScope;
+
+type ProductionDialogKind = "create-set" | "rename-set" | "create-slot" | "rename-slot";
+
+type ProductionDialog = {
+  kind: ProductionDialogKind;
+  value: string;
+  error: string | null;
+};
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || target.isContentEditable;
+}
+
+function recoverableMetadata(value: unknown, expected: StudioMetadata): StudioMetadata | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Partial<StudioMetadata>;
+  if (candidate.id !== expected.id || candidate.class !== expected.class || candidate.part !== expected.part || candidate.schema_version !== 2) return null;
+  if (!candidate.targeting || typeof candidate.targeting !== "object" || !Array.isArray(candidate.effects)) return null;
+  return cloneStudioMetadata(candidate as StudioMetadata);
+}
+
 function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
   cards: CatalogCard[];
   exportRoot: string | null;
@@ -259,9 +303,25 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
   onDirtyChange: (dirty: boolean) => void;
 }) {
   const [search, setSearch] = useState("");
+  const [scope, setScope] = useState<ProductionScope>("all");
+  const [classFilter, setClassFilter] = useState<string | null>(null);
+  const [partFilter, setPartFilter] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<ProductionStatus | null>(null);
+  const [hasEffectsFilter, setHasEffectsFilter] = useState(false);
+  const [hasCleanFilter, setHasCleanFilter] = useState(false);
+  const [gameReadyFilter, setGameReadyFilter] = useState(false);
+  const [sets, setSets] = useState<CardSetDocument[]>([]);
+  const [currentSetId, setCurrentSetId] = useState<string | null>(null);
+  const [currentSlotId, setCurrentSlotId] = useState<string | null>(null);
+  const [assignmentSlotId, setAssignmentSlotId] = useState<string | null>(null);
+  const [dashboard, setDashboard] = useState<ProductionDashboard | null>(null);
+  const [productionBusy, setProductionBusy] = useState(false);
+  const [productionDialog, setProductionDialog] = useState<ProductionDialog | null>(null);
+  const [gameSetExport, setGameSetExport] = useState<GameSetExportResult | null>(null);
+  const [setExportVisualSource, setSetExportVisualSource] = useState<VisualSource>("original");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [studioCard, setStudioCard] = useState<StudioCardPayload | null>(null);
-  const [draft, setDraft] = useState<StudioMetadata | null>(null);
+  const [editHistory, setEditHistory] = useState<EditorHistory<StudioMetadata> | null>(null);
   const [saved, setSaved] = useState<StudioMetadata | null>(null);
   const [preview, setPreview] = useState<StudioPreviewPayload | null>(null);
   const [originalPreview, setOriginalPreview] = useState<PreviewPayload | null>(null);
@@ -269,17 +329,42 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
   const [newEffectType, setNewEffectType] = useState<EffectType>("damage");
   const [advancedText, setAdvancedText] = useState("");
   const [advancedError, setAdvancedError] = useState<string | null>(null);
+  const [gameplayClipboard, setGameplayClipboard] = useState<Pick<StudioMetadata, "targeting" | "effects"> | null>(null);
+  const [recoveryDraft, setRecoveryDraft] = useState<StudioDraftDocument | null>(null);
+  const [draftTouched, setDraftTouched] = useState(false);
+  const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [loadingCard, setLoadingCard] = useState(false);
   const [renderBusy, setRenderBusy] = useState(false);
   const [originalBusy, setOriginalBusy] = useState(false);
-  const [actionBusy, setActionBusy] = useState<"save" | "import" | "export" | "game-export" | null>(null);
+  const [layoutReloadBusy, setLayoutReloadBusy] = useState(false);
+  const [layoutRevision, setLayoutRevision] = useState(0);
+  const [actionBusy, setActionBusy] = useState<"save" | "import" | "export" | "game-export" | "draft" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isError, setIsError] = useState(false);
+  const dashboardRequestRef = useRef(0);
+  const selectedIdRef = useRef<string | null>(null);
+  const draftEpochRef = useRef(0);
+  const draftWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
 
-  const filtered = useMemo(
-    () => filterCatalog(cards, { ...EMPTY_FILTERS, search }),
-    [cards, search]
-  );
+  const draft = editHistory?.present ?? null;
+  const undoStack = editHistory?.past ?? [];
+  const redoStack = editHistory?.future ?? [];
+
+  const currentSet = useMemo(() => sets.find((set) => set.id === currentSetId) ?? null, [sets, currentSetId]);
+  const currentSlot = useMemo(() => currentSet?.axies.find((slot) => slot.id === currentSlotId) ?? null, [currentSet, currentSlotId]);
+  const productionByCard = useMemo(() => new Map((dashboard?.cards ?? []).map((state) => [state.card_id, state])), [dashboard]);
+  const filtered = useMemo(() => filterProductionCards(cards, productionByCard, {
+    search,
+    scope,
+    setCardIds: currentSet?.cards ?? [],
+    slotCardIds: currentSlot?.cards ?? [],
+    className: classFilter,
+    part: partFilter,
+    status: statusFilter,
+    hasEffects: hasEffectsFilter,
+    hasClean: hasCleanFilter,
+    gameReady: gameReadyFilter
+  }), [cards, classFilter, currentSet, currentSlot, gameReadyFilter, hasCleanFilter, hasEffectsFilter, partFilter, productionByCard, scope, search, statusFilter]);
   const hasUnsavedChanges = useMemo(
     () => Boolean(draft && saved && (JSON.stringify(draft) !== JSON.stringify(saved) || advancedText !== JSON.stringify(draft, null, 2))),
     [advancedText, draft, saved]
@@ -288,6 +373,63 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
   const previewBusy = visualSource === "original" ? originalBusy : renderBusy;
   const shownPreview = visualSource === "original" ? originalPreview?.dataUrl : preview?.dataUrl;
   const shownPreviewHash = visualSource === "original" ? originalPreview?.sha256 : preview?.sha256;
+  const selectedProduction = selectedId ? productionByCard.get(selectedId) ?? null : null;
+  const validationErrors = validation?.issues.filter((issue) => issue.severity === "error") ?? [];
+  const validationWarnings = validation?.issues.filter((issue) => issue.severity === "warning") ?? [];
+  const editorLockedByRecovery = recoveryDraft !== null;
+  const filteredCardIds = useMemo(() => filtered.map((card) => card.id), [filtered]);
+  const currentIndex = selectedId ? filteredCardIds.indexOf(selectedId) : -1;
+  const previousId = adjacentCardId(filteredCardIds, selectedId, "previous");
+  const nextId = adjacentCardId(filteredCardIds, selectedId, "next");
+  const navigationEnabled = scope !== "all";
+  const currentSetProduction = useMemo(() => {
+    const ids = new Set(currentSet?.cards ?? []);
+    return (dashboard?.cards ?? []).filter((state) => ids.has(state.card_id));
+  }, [currentSet, dashboard]);
+  const setExportReady = currentSetProduction.filter((state) => state.game_ready && state.exportable_visual_sources.includes(setExportVisualSource)).length;
+  const setExportBlocked = Math.max(0, (currentSet?.cards.length ?? 0) - setExportReady);
+  const setExportWarnings = currentSetProduction.reduce((total, state) => total + state.warnings, 0);
+
+  const queueDraftWrite = (operation: () => Promise<void>): Promise<void> => {
+    const queued = draftWriteQueueRef.current.catch(() => undefined).then(operation);
+    draftWriteQueueRef.current = queued;
+    return queued;
+  };
+
+  const refreshDashboard = async (setId: string | null) => {
+    const requestId = ++dashboardRequestRef.current;
+    const next = await window.axieCards.getProductionDashboard({ setId });
+    if (requestId === dashboardRequestRef.current) {
+      setDashboard(next);
+      setSets(next.sets);
+    }
+    return next;
+  };
+
+  useEffect(() => {
+    let active = true;
+    window.axieCards.listCardSets()
+      .then(async (availableSets) => {
+        if (!active) return;
+        setSets(availableSets);
+        const initialSetId = availableSets[0]?.id ?? null;
+        setCurrentSetId(initialSetId);
+        const requestId = ++dashboardRequestRef.current;
+        const next = await window.axieCards.getProductionDashboard({ setId: initialSetId });
+        if (!active || requestId !== dashboardRequestRef.current) return;
+        setDashboard(next);
+        setSets(next.sets);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setMessage(`Production workspace could not be loaded. ${errorMessage(error)}`);
+        setIsError(true);
+      });
+    return () => {
+      active = false;
+      dashboardRequestRef.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     onDirtyChange(hasUnsavedChanges);
@@ -306,12 +448,17 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
   }, [hasUnsavedChanges]);
 
   useEffect(() => {
-    if (selectedId && !cards.some((card) => card.id === selectedId)) setSelectedId(null);
+    if (selectedId && !cards.some((card) => card.id === selectedId)) {
+      selectedIdRef.current = null;
+      setSelectedId(null);
+    }
   }, [cards, selectedId]);
 
   useEffect(() => {
+    selectedIdRef.current = selectedId;
+    draftEpochRef.current += 1;
     setStudioCard(null);
-    setDraft(null);
+    setEditHistory(null);
     setSaved(null);
     setPreview(null);
     setOriginalPreview(null);
@@ -323,14 +470,18 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
 
     let active = true;
     setLoadingCard(true);
-    window.axieCards.loadStudioCard(selectedId)
-      .then((payload) => {
+    setRecoveryDraft(null);
+    setDraftTouched(false);
+    setDraftStatus("idle");
+    Promise.all([window.axieCards.loadStudioCard(selectedId), window.axieCards.loadStudioDraft(selectedId)])
+      .then(([payload, recovery]) => {
         if (!active) return;
         setStudioCard(payload);
-        setDraft(cloneStudioMetadata(payload.metadata));
+        setEditHistory(createEditorHistory(payload.metadata));
         setSaved(cloneStudioMetadata(payload.metadata));
         setAdvancedText(JSON.stringify(payload.metadata, null, 2));
         setVisualSource(payload.clean.available ? "rendered" : "original");
+        setRecoveryDraft(recovery.available ? recovery.draft : null);
       })
       .catch((error) => {
         if (!active) return;
@@ -341,6 +492,34 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
 
     return () => { active = false; };
   }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId || !draft || !saved || !draftTouched || recoveryDraft) return;
+    const changed = JSON.stringify(draft) !== JSON.stringify(saved);
+    const cardId = selectedId;
+    const draftEpoch = draftEpochRef.current;
+    const metadata = cloneStudioMetadata(draft);
+    const timer = window.setTimeout(() => {
+      if (selectedIdRef.current !== cardId || draftEpochRef.current !== draftEpoch) return;
+      setDraftStatus("saving");
+      queueDraftWrite(async () => {
+        if (selectedIdRef.current !== cardId || draftEpochRef.current !== draftEpoch) return;
+        if (changed) await window.axieCards.saveStudioDraft({ cardId, metadata });
+        else await window.axieCards.discardStudioDraft(cardId);
+      })
+        .then(() => {
+          if (selectedIdRef.current !== cardId || draftEpochRef.current !== draftEpoch) return;
+          setDraftStatus(changed ? "saved" : "idle");
+        })
+        .catch((error) => {
+          if (selectedIdRef.current !== cardId || draftEpochRef.current !== draftEpoch) return;
+          setDraftStatus("error");
+          setMessage(`Recovery draft could not be written. ${errorMessage(error)}`);
+          setIsError(true);
+        });
+    }, 850);
+    return () => window.clearTimeout(timer);
+  }, [draft, draftTouched, recoveryDraft, saved, selectedId]);
 
   useEffect(() => {
     setOriginalPreview(null);
@@ -400,20 +579,76 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [selectedId, draft, studioCard?.clean.available, studioCard?.clean.sha256, validation?.status, visualSource]);
+  }, [selectedId, draft, studioCard?.clean.available, studioCard?.clean.sha256, validation?.status, visualSource, layoutRevision]);
+
+  const reloadLayout = async () => {
+    setLayoutReloadBusy(true);
+    setMessage(null);
+    setIsError(false);
+    try {
+      await window.axieCards.reloadStudioLayout();
+      // Incrementing this revision re-runs the existing backend render path.
+      // It does not alter metadata, gameplay, or any asset on disk.
+      setLayoutRevision((revision) => revision + 1);
+      setMessage("Layout reloaded.");
+    } catch (error) {
+      setMessage(`Layout reload failed. Fix config/card_layout.json and try again. ${errorMessage(error)}`);
+      setIsError(true);
+    } finally {
+      setLayoutReloadBusy(false);
+    }
+  };
 
   const acceptDraft = (next: StudioMetadata, allowPendingAdvanced = false) => {
+    if (editorLockedByRecovery) return false;
     const serializedDraft = draft ? JSON.stringify(draft, null, 2) : "";
     if (!allowPendingAdvanced && draft && advancedText !== serializedDraft && !window.confirm("Discard unapplied Advanced JSON and continue with the visual editor change?")) {
       return false;
     }
-    setDraft(next);
+    if (editHistory && JSON.stringify(draft) !== JSON.stringify(next)) {
+      setEditHistory(pushEditorHistory(editHistory, next));
+    } else if (!editHistory) {
+      setEditHistory(createEditorHistory(next));
+    }
+    draftEpochRef.current += 1;
+    setDraftTouched(true);
+    setDraftStatus("idle");
     setAdvancedText(JSON.stringify(next, null, 2));
     setAdvancedError(null);
     setMessage(null);
     setIsError(false);
     return true;
   };
+
+  const restoreHistory = (direction: "undo" | "redo") => {
+    if (!draft || editorLockedByRecovery) return;
+    if (advancedText !== JSON.stringify(draft, null, 2) && !window.confirm("Discard unapplied Advanced JSON before changing edit history?")) return;
+    if (!editHistory) return;
+    const nextHistory = direction === "undo" ? undoEditorHistory(editHistory) : redoEditorHistory(editHistory);
+    if (JSON.stringify(nextHistory.present) === JSON.stringify(editHistory.present)) return;
+    draftEpochRef.current += 1;
+    setEditHistory(nextHistory);
+    setAdvancedText(JSON.stringify(nextHistory.present, null, 2));
+    setAdvancedError(null);
+    setDraftTouched(true);
+    setDraftStatus("idle");
+  };
+
+  useEffect(() => {
+    const keyboardHistory = (event: KeyboardEvent) => {
+      if (editorLockedByRecovery || !(event.ctrlKey || event.metaKey) || event.altKey || isEditableTarget(event.target)) return;
+      const key = event.key.toLowerCase();
+      if (key === "z" && !event.shiftKey && undoStack.length) {
+        event.preventDefault();
+        restoreHistory("undo");
+      } else if ((key === "y" || (key === "z" && event.shiftKey)) && redoStack.length) {
+        event.preventDefault();
+        restoreHistory("redo");
+      }
+    };
+    window.addEventListener("keydown", keyboardHistory);
+    return () => window.removeEventListener("keydown", keyboardHistory);
+  }, [advancedText, draft, editorLockedByRecovery, redoStack, undoStack]);
 
   const updateDraft = <K extends keyof StudioMetadata>(key: K, value: StudioMetadata[K]) => {
     if (draft) acceptDraft({ ...draft, [key]: value });
@@ -459,44 +694,193 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     setMessage("Advanced JSON applied to the current draft. Save Metadata to persist it.");
   };
 
-  const selectStudioCard = (cardId: string) => {
-    if (cardId === selectedId) return;
-    if (hasUnsavedChanges && !window.confirm("Discard unsaved Card Studio changes and open another card?")) return;
+  const selectStudioCard = async (cardId: string, skipGuard = false): Promise<boolean> => {
+    if (cardId === selectedId) return true;
+    if (!skipGuard && hasUnsavedChanges) {
+      const pendingAdvancedJson = Boolean(draft && advancedText !== JSON.stringify(draft, null, 2));
+      const acceptedDraftChanged = Boolean(draft && saved && JSON.stringify(draft) !== JSON.stringify(saved));
+      const prompt = pendingAdvancedJson
+        ? "Open another card? Accepted editor changes will be kept as a recovery draft, but unapplied Advanced JSON will be discarded."
+        : "Keep this card's recovery draft and open another card without saving confirmed metadata?";
+      if (!window.confirm(prompt)) return false;
+      if (acceptedDraftChanged && selectedId && draft) {
+        const previousCardId = selectedId;
+        const metadata = cloneStudioMetadata(draft);
+        const flushEpoch = ++draftEpochRef.current;
+        setActionBusy("draft");
+        setDraftStatus("saving");
+        try {
+          await queueDraftWrite(() => window.axieCards.saveStudioDraft({ cardId: previousCardId, metadata }).then(() => undefined));
+          if (selectedIdRef.current !== previousCardId || draftEpochRef.current !== flushEpoch) return false;
+          setDraftStatus("saved");
+        } catch (error) {
+          if (selectedIdRef.current === previousCardId && draftEpochRef.current === flushEpoch) {
+            setDraftStatus("error");
+            setMessage(`The recovery draft could not be saved, so the current card remains open. ${errorMessage(error)}`);
+            setIsError(true);
+          }
+          return false;
+        } finally {
+          setActionBusy(null);
+        }
+      }
+    }
+    selectedIdRef.current = cardId;
+    draftEpochRef.current += 1;
     setSelectedId(cardId);
+    return true;
   };
 
-  const saveMetadata = async () => {
-    if (!selectedId || !draft) return;
+  const saveMetadata = async (): Promise<boolean> => {
+    if (!selectedId || !draft) return false;
     if (advancedText !== JSON.stringify(draft, null, 2)) {
       setAdvancedError("Apply or reset the pending Advanced JSON before saving.");
-      return;
+      return false;
     }
-    if (validation?.status === "invalid") return;
+    if (validation?.status === "invalid") return false;
     setActionBusy("save");
     setMessage(null);
     setIsError(false);
     try {
-      const payload = await window.axieCards.saveStudioMetadata({ cardId: selectedId, metadata: draft });
-      setStudioCard(payload);
-      setDraft(cloneStudioMetadata(payload.metadata));
-      setSaved(cloneStudioMetadata(payload.metadata));
-      setAdvancedText(JSON.stringify(payload.metadata, null, 2));
-      setMessage("Game metadata saved. The JSON is now the source of truth for this card.");
+    let payload: StudioCardPayload;
+    try {
+      payload = await window.axieCards.saveStudioMetadata({ cardId: selectedId, metadata: draft });
     } catch (error) {
       setMessage(`Metadata could not be saved. Check the fields and try again. ${errorMessage(error)}`);
       setIsError(true);
+      return false;
+    }
+
+    draftEpochRef.current += 1;
+    setStudioCard(payload);
+    setEditHistory(createEditorHistory(payload.metadata));
+    setSaved(cloneStudioMetadata(payload.metadata));
+    setAdvancedText(JSON.stringify(payload.metadata, null, 2));
+    setDraftTouched(false);
+    setDraftStatus("idle");
+
+    const followUpErrors: string[] = [];
+    try {
+      await queueDraftWrite(() => window.axieCards.discardStudioDraft(selectedId));
+    } catch (error) {
+      followUpErrors.push(`the recovery draft could not be cleared (${errorMessage(error)})`);
+    }
+    try {
+      await refreshDashboard(currentSetId);
+    } catch (error) {
+      followUpErrors.push(`production indicators could not be refreshed (${errorMessage(error)})`);
+    }
+    if (followUpErrors.length > 0) {
+      setMessage(`Game metadata was saved, but ${followUpErrors.join(" and ")}.`);
+      setIsError(true);
+    } else {
+      setMessage("Game metadata saved. The JSON is now the source of truth for this card.");
+      setIsError(false);
+    }
+    return true;
     } finally {
       setActionBusy(null);
     }
   };
 
-  const resetMetadata = () => {
-    if (!saved) return;
-    setDraft(cloneStudioMetadata(saved));
+  const saveAndNext = async () => {
+    if (!nextId) return;
+    if (await saveMetadata()) await selectStudioCard(nextId, true);
+  };
+
+  const resetMetadata = async () => {
+    if (!saved || !selectedId) return;
+    const cardId = selectedId;
+    const resetEpoch = ++draftEpochRef.current;
+    setEditHistory(createEditorHistory(saved));
     setAdvancedText(JSON.stringify(saved, null, 2));
     setAdvancedError(null);
-    setMessage("Unsaved changes reset to the last saved or default metadata.");
+    setDraftTouched(false);
+    setDraftStatus("saving");
+    try {
+      await queueDraftWrite(() => window.axieCards.discardStudioDraft(cardId));
+      if (selectedIdRef.current !== cardId || draftEpochRef.current !== resetEpoch) return;
+      setDraftStatus("idle");
+      setMessage("Unsaved changes reset to the last saved or default metadata.");
+      setIsError(false);
+    } catch (error) {
+      if (selectedIdRef.current !== cardId || draftEpochRef.current !== resetEpoch) return;
+      setDraftStatus("error");
+      setMessage(`The editor was reset, but its recovery draft could not be discarded. ${errorMessage(error)}`);
+      setIsError(true);
+    }
+  };
+
+  const restoreRecoveryDraft = () => {
+    if (!recoveryDraft || !selectedId || !draft) return;
+    if (recoveryDraft.card_id !== selectedId) {
+      setMessage("The recovery draft belongs to another source card. Discard it to continue safely.");
+      setIsError(true);
+      return;
+    }
+    const restored = recoverableMetadata(recoveryDraft.metadata, draft);
+    if (!restored) {
+      setMessage("The recovery draft is malformed or belongs to another card. Discard it to continue safely.");
+      setIsError(true);
+      return;
+    }
+    draftEpochRef.current += 1;
+    setEditHistory(pushEditorHistory(createEditorHistory(draft), restored));
+    setAdvancedText(JSON.stringify(restored, null, 2));
+    setAdvancedError(null);
+    setRecoveryDraft(null);
+    setDraftTouched(true);
+    setDraftStatus("idle");
+    setMessage("Unsaved draft restored. Save Metadata to confirm it.");
     setIsError(false);
+  };
+
+  const discardRecoveryDraft = async () => {
+    if (!selectedId) return;
+    const cardId = selectedId;
+    try {
+      await queueDraftWrite(() => window.axieCards.discardStudioDraft(cardId));
+      if (selectedIdRef.current !== cardId) return;
+      setRecoveryDraft(null);
+      setDraftStatus("idle");
+      setMessage("Recovery draft discarded. Confirmed metadata was not changed.");
+      await refreshDashboard(currentSetId);
+    } catch (error) {
+      setMessage(`Recovery draft could not be discarded. ${errorMessage(error)}`);
+      setIsError(true);
+    }
+  };
+
+  const copyGameplay = () => {
+    if (!draft) return;
+    setGameplayClipboard(copyGameplayData(draft));
+    setMessage(`Gameplay copied for this session (${draft.effects.length} effect${draft.effects.length === 1 ? "" : "s"}).`);
+    setIsError(false);
+  };
+
+  const pasteGameplay = () => {
+    if (!draft || !gameplayClipboard) return;
+    if (draft.effects.length && !window.confirm(`Paste Gameplay will replace targeting and ${draft.effects.length} existing effect${draft.effects.length === 1 ? "" : "s"}. Continue?`)) return;
+    acceptDraft(pasteGameplayData(draft, gameplayClipboard));
+    setMessage("Gameplay pasted. Card identity and visual metadata were preserved.");
+  };
+
+  const focusIssue = (path: string) => {
+    const candidates = Array.from(document.querySelectorAll<HTMLElement>("[data-validation-path]"));
+    let candidate = candidates.find((element) => element.dataset.validationPath === path);
+    let parentPath = path;
+    while (!candidate && parentPath !== "$") {
+      const nextParent = parentPath.replace(/(?:\.[^.\[]+|\[\d+\])$/, "");
+      if (nextParent === parentPath) break;
+      parentPath = nextParent || "$";
+      candidate = candidates.find((element) => element.dataset.validationPath === parentPath);
+    }
+    candidate ??= candidates.find((element) => element.dataset.validationPath?.startsWith(`${path}.`));
+    candidate ??= candidates.find((element) => element.dataset.validationPath === "$");
+    const details = candidate?.closest("details");
+    if (details instanceof HTMLDetailsElement) details.open = true;
+    candidate?.focus();
+    candidate?.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
   const importClean = async () => {
@@ -515,11 +899,17 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
       setStudioCard(payload);
       setSaved(cloneStudioMetadata(payload.metadata));
       const nextDraft = currentDraft ?? cloneStudioMetadata(payload.metadata);
-      setDraft(nextDraft);
+      setEditHistory((current) => current ?? createEditorHistory(nextDraft));
       if (!hasPendingAdvancedJson) setAdvancedText(JSON.stringify(nextDraft, null, 2));
       setPreview(null);
       setVisualSource("rendered");
-      setMessage("Clean base imported. The original PNG remains unchanged while previews render separately.");
+      try {
+        await refreshDashboard(currentSetId);
+        setMessage("Clean base imported. The original PNG remains unchanged while previews render separately.");
+      } catch (error) {
+        setMessage(`Clean base imported, but production indicators could not be refreshed. ${errorMessage(error)}`);
+        setIsError(true);
+      }
     } catch (error) {
       setMessage(`Clean base could not be imported. Select a readable PNG and try again. ${errorMessage(error)}`);
       setIsError(true);
@@ -535,7 +925,13 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     setIsError(false);
     try {
       const payload = await window.axieCards.exportStudioRendered({ cardId: selectedId, metadata: draft });
-      setMessage(`Rendered card exported to ${payload.path}.`);
+      try {
+        await refreshDashboard(currentSetId);
+        setMessage(`Rendered card exported to ${payload.path}.`);
+      } catch (error) {
+        setMessage(`Rendered card was exported to ${payload.path}, but production indicators could not be refreshed. ${errorMessage(error)}`);
+        setIsError(true);
+      }
     } catch (error) {
       setMessage(`Rendered card could not be exported. ${errorMessage(error)}`);
       setIsError(true);
@@ -569,26 +965,275 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     }
   };
 
+  const changeCurrentSet = async (setId: string | null) => {
+    if (setId === currentSetId) return;
+    if (hasUnsavedChanges && !window.confirm("Keep the recovery draft and change Card Set without saving confirmed metadata?")) return;
+    setCurrentSetId(setId);
+    setCurrentSlotId(null);
+    setAssignmentSlotId(null);
+    setGameSetExport(null);
+    if (!setId && scope !== "all") setScope("all");
+    else if (setId && scope === "slot") setScope("set");
+    try {
+      await refreshDashboard(setId);
+    } catch (error) {
+      setMessage(`Card Set could not be selected. ${errorMessage(error)}`);
+      setIsError(true);
+    }
+  };
+
+  const changeCurrentSlot = (slotId: string | null) => {
+    if (slotId === currentSlotId) return;
+    if (hasUnsavedChanges && !window.confirm("Keep the recovery draft and change Axie Slot without saving confirmed metadata?")) return;
+    setCurrentSlotId(slotId);
+    if (slotId) setScope("slot");
+    else if (scope === "slot") setScope(currentSet ? "set" : "all");
+  };
+
+  const openProductionDialog = (kind: ProductionDialogKind) => {
+    if ((kind === "create-slot" || kind === "rename-slot") && !currentSet) return;
+    if ((kind === "rename-set" || kind === "rename-slot") && !currentSet) return;
+    const value = kind === "create-set"
+      ? "First Battle Set"
+      : kind === "create-slot"
+        ? `Axie Slot ${(currentSet?.axies.length ?? 0) + 1}`
+        : kind === "rename-set"
+          ? currentSet?.name ?? ""
+          : currentSlot?.name ?? "";
+    setProductionDialog({ kind, value, error: null });
+  };
+
+  const submitProductionDialog = async () => {
+    const dialog = productionDialog;
+    if (!dialog || productionBusy) return;
+    const name = dialog.value.trim();
+    const optional = dialog.kind === "create-slot" || dialog.kind === "rename-slot";
+    if (!name && !optional) {
+      setProductionDialog({ ...dialog, error: "Enter a name before continuing." });
+      return;
+    }
+    if (dialog.kind === "rename-set" && (!currentSet || name === currentSet.name)) {
+      setProductionDialog(null);
+      return;
+    }
+    if (dialog.kind === "rename-slot" && (!currentSet || !currentSlot || name === (currentSlot.name ?? ""))) {
+      setProductionDialog(null);
+      return;
+    }
+    setProductionBusy(true);
+    try {
+      if (dialog.kind === "create-set") {
+        const created = await window.axieCards.createCardSet({ name });
+        setCurrentSetId(created.id);
+        setCurrentSlotId(null);
+        setScope("set");
+        await refreshDashboard(created.id);
+        setMessage(`Card Set “${created.name}” created.`);
+      } else if (dialog.kind === "rename-set" && currentSet) {
+        const updated = await window.axieCards.renameCardSet({ setId: currentSet.id, name });
+        await refreshDashboard(updated.id);
+        setMessage(`Card Set renamed to “${updated.name}”.`);
+      } else if (dialog.kind === "create-slot" && currentSet) {
+        const updated = await window.axieCards.createAxieSlot({ setId: currentSet.id, name: name || null });
+        await refreshDashboard(updated.id);
+        const created = updated.axies.at(-1) ?? null;
+        setCurrentSlotId(created?.id ?? null);
+        setAssignmentSlotId(created?.id ?? null);
+        setScope(created ? "slot" : "set");
+        setMessage("Axie Slot created.");
+      } else if (dialog.kind === "rename-slot" && currentSet && currentSlot) {
+        const updated = await window.axieCards.renameAxieSlot({ setId: currentSet.id, slotId: currentSlot.id, name: name || null });
+        await refreshDashboard(updated.id);
+        setMessage("Axie Slot renamed.");
+      }
+      setProductionDialog(null);
+      setIsError(false);
+    } catch (error) {
+      setProductionDialog({ ...dialog, error: errorMessage(error) });
+      setMessage(`Production workspace action could not be completed. ${errorMessage(error)}`);
+      setIsError(true);
+    } finally {
+      setProductionBusy(false);
+    }
+  };
+
+  const createSet = () => openProductionDialog("create-set");
+  const renameSet = () => openProductionDialog("rename-set");
+
+  const deleteSet = async () => {
+    if (!currentSet || !window.confirm(`Delete Card Set “${currentSet.name}”? Game Metadata and RAW assets will not be deleted.`)) return;
+    if (hasUnsavedChanges && !window.confirm("This card still has unsaved edits. Keep its recovery draft and delete only the Card Set?")) return;
+    setProductionBusy(true);
+    try {
+      await window.axieCards.deleteCardSet(currentSet.id);
+      const availableSets = await window.axieCards.listCardSets();
+      const nextSetId = availableSets[0]?.id ?? null;
+      setSets(availableSets);
+      setCurrentSetId(nextSetId);
+      setCurrentSlotId(null);
+      setScope(nextSetId ? "set" : "all");
+      await refreshDashboard(nextSetId);
+      setMessage("Card Set deleted. Card metadata and source assets were preserved.");
+      setIsError(false);
+    } catch (error) {
+      setMessage(`Card Set could not be deleted. ${errorMessage(error)}`);
+      setIsError(true);
+    } finally {
+      setProductionBusy(false);
+    }
+  };
+
+  const createSlot = () => openProductionDialog("create-slot");
+  const renameSlot = () => openProductionDialog("rename-slot");
+
+  const deleteSlot = async () => {
+    if (!currentSet || !currentSlot || !window.confirm(`Delete ${currentSlot.name || currentSlot.id}? Cards remain in the Card Set and their metadata is preserved.`)) return;
+    if (hasUnsavedChanges && !window.confirm("This card still has unsaved edits. Keep its recovery draft and delete only the slot?")) return;
+    setProductionBusy(true);
+    try {
+      const updated = await window.axieCards.deleteAxieSlot({ setId: currentSet.id, slotId: currentSlot.id });
+      setCurrentSlotId(null);
+      setAssignmentSlotId(null);
+      setScope("set");
+      await refreshDashboard(updated.id);
+      setMessage("Axie Slot deleted. Cards remain in the set.");
+      setIsError(false);
+    } catch (error) {
+      setMessage(`Axie Slot could not be deleted. ${errorMessage(error)}`);
+      setIsError(true);
+    } finally {
+      setProductionBusy(false);
+    }
+  };
+
+  const setMembership = async (add: boolean) => {
+    if (!currentSet || !selectedId) return;
+    setProductionBusy(true);
+    try {
+      const updated = add
+        ? await window.axieCards.addCardToSet({ setId: currentSet.id, cardId: selectedId })
+        : await window.axieCards.removeCardFromSet({ setId: currentSet.id, cardId: selectedId });
+      await refreshDashboard(updated.id);
+      setMessage(add ? "Card added to Current Set." : "Card removed from Current Set and its slots. Metadata was preserved.");
+      setIsError(false);
+    } catch (error) {
+      setMessage(`Card Set membership could not be updated. ${errorMessage(error)}`);
+      setIsError(true);
+    } finally {
+      setProductionBusy(false);
+    }
+  };
+
+  const slotMembership = async (add: boolean) => {
+    if (!currentSet || !selectedId) return;
+    const slotId = add ? assignmentSlotId : currentSlotId;
+    if (!slotId) return;
+    setProductionBusy(true);
+    try {
+      const request = { setId: currentSet.id, slotId, cardId: selectedId };
+      const updated = add
+        ? await window.axieCards.assignCardToAxieSlot(request)
+        : await window.axieCards.removeCardFromAxieSlot(request);
+      await refreshDashboard(updated.id);
+      setMessage(add ? "Card assigned to Axie Slot." : "Card removed from Axie Slot; it remains in the set.");
+      setIsError(false);
+    } catch (error) {
+      setMessage(`Axie Slot assignment could not be updated. ${errorMessage(error)}`);
+      setIsError(true);
+    } finally {
+      setProductionBusy(false);
+    }
+  };
+
+  const exportGameSet = async () => {
+    if (!currentSet || !dashboard) return;
+    const ready = setExportReady;
+    const blocked = setExportBlocked;
+    const readyOnly = blocked > 0;
+    const summary = [
+      `Export Card Set “${currentSet.name}”?`,
+      `Total cards: ${currentSet.cards.length}`,
+      `Game Ready: ${ready}`,
+      `Warnings: ${setExportWarnings}`,
+      `Blocked: ${blocked}`,
+      readyOnly ? "Only Game Ready cards will be exported; blocked cards will be skipped." : "All cards are Game Ready."
+    ].join("\n");
+    if (!window.confirm(summary)) return;
+    if (!exportRoot && !await onChooseFolder()) return;
+    setProductionBusy(true);
+    setGameSetExport(null);
+    try {
+      const result = await window.axieCards.exportStudioGameSet({ setId: currentSet.id, visualSource: setExportVisualSource, readyOnly });
+      setGameSetExport(result);
+      setMessage(`Game Set export complete: ${result.report.success} success, ${result.report.failed} failed, ${result.report.skipped} skipped.`);
+      setIsError(result.report.failed > 0);
+    } catch (error) {
+      setMessage(`Game Set could not be exported. ${errorMessage(error)}`);
+      setIsError(true);
+    } finally {
+      setProductionBusy(false);
+    }
+  };
+
+  const dialogTitle = productionDialog?.kind === "create-set" ? "Create Card Set"
+    : productionDialog?.kind === "rename-set" ? "Rename Card Set"
+      : productionDialog?.kind === "create-slot" ? "Create Axie Slot" : "Rename Axie Slot";
+  const dialogDescription = productionDialog?.kind === "create-slot" || productionDialog?.kind === "rename-slot"
+    ? "Choose a display name for this slot. Leave it empty to use the default label."
+    : "Choose a name for this production Card Set.";
+  const dialogSubmitLabel = productionDialog?.kind.startsWith("create") ? "Create" : "Save";
+
   return (
+    <>
     <div className="studio-layout">
       <aside className="panel studio-browser">
-        <div className="panel-heading row">
-          <div><span className="eyebrow">Card Studio</span><h2>Card browser</h2></div>
-          <span className="count-pill">{filtered.length}</span>
+        <div className="production-workspace">
+          <div className="section-title"><div><span className="eyebrow">Production workspace</span><h2>Card Sets</h2></div><button className="ghost compact" disabled={productionBusy} onClick={createSet}>+ Create</button></div>
+          <label className="field compact-field"><span>Current Set</span><select disabled={productionBusy} value={currentSetId ?? ""} onChange={(event) => void changeCurrentSet(event.target.value || null)}><option value="">No set selected</option>{sets.map((set) => <option key={set.id} value={set.id}>{set.name}</option>)}</select></label>
+          <div className="compact-actions"><button className="ghost" disabled={!currentSet || productionBusy} onClick={renameSet}>Rename</button><button className="ghost danger" disabled={!currentSet || productionBusy} onClick={deleteSet}>Delete</button></div>
+          {currentSet && dashboard && <div className="production-dashboard">
+            <div className="dashboard-title"><strong>{currentSet.name}</strong><span>{dashboard.counts.total} cards · {currentSet.axies.length} Axies</span></div>
+            <span><b>{dashboard.counts.unconfigured}</b> Unconfigured</span><span><b>{dashboard.counts.draft}</b> Draft</span><span><b>{dashboard.counts.valid}</b> Valid</span><span className="ready"><b>{dashboard.counts.game_ready}</b> Game Ready</span>
+          </div>}
+          <div className="slot-controls">
+            <label className="field compact-field"><span>Axie Slot</span><select disabled={!currentSet || productionBusy} value={currentSlotId ?? ""} onChange={(event) => changeCurrentSlot(event.target.value || null)}><option value="">All slots</option>{currentSet?.axies.map((slot, index) => <option key={slot.id} value={slot.id}>{slot.name || `Axie Slot ${index + 1}`}</option>)}</select></label>
+            <div className="compact-actions"><button className="ghost" disabled={!currentSet || productionBusy} onClick={createSlot}>+ Slot</button><button className="ghost" disabled={!currentSlot || productionBusy} onClick={renameSlot}>Rename</button><button className="ghost danger" disabled={!currentSlot || productionBusy} onClick={deleteSlot}>Delete</button></div>
+          </div>
+        </div>
+        <div className="panel-heading row compact-heading">
+          <div><span className="eyebrow">Production browser</span><h2>Cards</h2></div>
+          <span className="count-pill">{filtered.length} / {cards.length}</span>
         </div>
         <label className="field studio-search">
           <span>Search</span>
           <input value={search} placeholder="Name, slug, local name or ID" onChange={(event) => setSearch(event.target.value)} />
         </label>
+        <div className="production-filters">
+          <label className="field compact-field"><span>View</span><select value={scope} onChange={(event) => {
+            const next = event.target.value as ProductionScope;
+            if (next === "slot" && !currentSlot) return;
+            if (next === "set" && !currentSet) return;
+            setScope(next);
+          }}><option value="all">All Cards</option><option value="set" disabled={!currentSet}>Current Set</option><option value="slot" disabled={!currentSlot}>Axie Slot</option></select></label>
+          <div className="filter-pair">
+            <SelectFilter label="Class" value={classFilter} options={CLASSES} allLabel="All" onChange={setClassFilter} />
+            <SelectFilter label="Part" value={partFilter} options={PARTS} allLabel="All" onChange={setPartFilter} />
+          </div>
+          <label className="field compact-field"><span>Status</span><select value={statusFilter ?? ""} onChange={(event) => setStatusFilter((event.target.value || null) as ProductionStatus | null)}><option value="">All</option><option>UNCONFIGURED</option><option>DRAFT</option><option>VALID</option><option>GAME_READY</option></select></label>
+          <div className="filter-checks"><label><input type="checkbox" checked={hasEffectsFilter} onChange={(event) => setHasEffectsFilter(event.target.checked)} /> Effects</label><label><input type="checkbox" checked={hasCleanFilter} onChange={(event) => setHasCleanFilter(event.target.checked)} /> Clean</label><label><input type="checkbox" checked={gameReadyFilter} onChange={(event) => setGameReadyFilter(event.target.checked)} /> Game Ready</label></div>
+          <button className="ghost clear-production-filters" onClick={() => { setSearch(""); setClassFilter(null); setPartFilter(null); setStatusFilter(null); setHasEffectsFilter(false); setHasCleanFilter(false); setGameReadyFilter(false); }}>Clear filters</button>
+        </div>
         <div className="studio-card-list">
-          {filtered.map((card) => (
-            <button key={card.id} disabled={actionBusy !== null} className={`card-row ${selectedId === card.id ? "selected" : ""}`} onClick={() => selectStudioCard(card.id)}>
+          {filtered.map((card) => {
+            const state = productionByCard.get(card.id);
+            return <button key={card.id} disabled={actionBusy !== null} className={`card-row production-card-row ${selectedId === card.id ? "selected" : ""}`} onClick={() => selectStudioCard(card.id)}>
               <span className="card-name">{card.name}</span>
+              <span className={`production-status status-${(state?.status ?? "UNCONFIGURED").toLowerCase()}`}>{state?.status ?? "UNCONFIGURED"}</span>
               <span className="card-traits">{card.class ?? "Unknown"} <b>•</b> {card.part ?? "Unknown"}</span>
-              <code>{card.local_name}</code>
-            </button>
-          ))}
-          {!filtered.length && <div className="empty">No cards match this search.</div>}
+              <span className="production-indicators" aria-label="Production indicators"><i className={state?.metadata_exists ? "on" : ""} title="Metadata">M</i><i className={state?.effect_count ? "on" : ""} title={`${state?.effect_count ?? 0} effects`}>E{state?.effect_count ?? 0}</i><i className={state?.original_available ? "on" : ""} title="Original available">O</i><i className={state?.clean_available ? "on" : ""} title="Clean available">C</i><i className={state?.rendered_available ? "on" : ""} title="Rendered available">R</i><i className={state?.game_ready ? "on ready" : ""} title="Game ready">G</i>{Boolean(state?.errors) && <i className="issue" title={`${state?.errors} errors`}>!{state?.errors}</i>}{Boolean(state?.warnings) && <i className="warning" title={`${state?.warnings} warnings`}>△{state?.warnings}</i>}</span>
+            </button>;
+          })}
+          {!filtered.length && <div className="empty">No cards match the combined production filters.</div>}
         </div>
       </aside>
 
@@ -601,13 +1246,24 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
           <div className="preview-empty"><div className="card-glyph">!</div><h2>Card unavailable</h2><p>Choose the card again or review the error below.</p></div>
         ) : (
           <>
+            {recoveryDraft && <div className="draft-recovery-banner"><div><b>Unsaved draft found</b><span>Restore it into the editor or discard it. Confirmed metadata has not changed.</span></div><button className="primary" onClick={restoreRecoveryDraft}>Restore Draft</button><button className="ghost" onClick={() => void discardRecoveryDraft()}>Discard Draft</button></div>}
+            <div className="production-card-toolbar">
+              <div className="card-navigation"><button className="ghost" disabled={!navigationEnabled || !previousId || actionBusy !== null} onClick={() => previousId && selectStudioCard(previousId)}>← Previous</button><span>{navigationEnabled && currentIndex >= 0 ? `${currentIndex + 1} / ${filtered.length}` : "Select a Set or Slot view for sequence navigation"}</span><button className="ghost" disabled={!navigationEnabled || !nextId || actionBusy !== null} onClick={() => nextId && selectStudioCard(nextId)}>Next →</button></div>
+              {currentSet && <div className="membership-row">
+                <button className="ghost" disabled={productionBusy} onClick={() => void setMembership(!currentSet.cards.includes(selectedId))}>{currentSet.cards.includes(selectedId) ? "Remove from Set" : "Add to Current Set"}</button>
+                <select disabled={!currentSet.cards.includes(selectedId) || productionBusy} value={assignmentSlotId ?? ""} onChange={(event) => setAssignmentSlotId(event.target.value || null)}><option value="">Assign to slot…</option>{currentSet.axies.map((slot, index) => <option key={slot.id} value={slot.id}>{slot.name || `Axie Slot ${index + 1}`}</option>)}</select>
+                <button className="ghost" disabled={!assignmentSlotId || !currentSet.cards.includes(selectedId) || productionBusy} onClick={() => void slotMembership(true)}>Assign</button>
+                {currentSlot?.cards.includes(selectedId) && <button className="ghost danger" disabled={productionBusy} onClick={() => void slotMembership(false)}>Remove from Slot</button>}
+              </div>}
+            </div>
             <div className="panel-heading row studio-preview-heading">
-              <div><span className="eyebrow">Visual source</span><h2>{draft.name || studioCard.source.name}</h2><p>{visualSource === "original" ? "Byte-preserving source placeholder" : "Clean visual + current game metadata"}</p></div>
-              <span className={`status-pill ${studioCard.clean.available ? "ready" : "missing"}`}>{studioCard.clean.available ? "Clean ready" : "Clean missing"}</span>
+              <div><span className="eyebrow">Visual source</span><h2>{draft.name || studioCard.source.name}</h2><p>{visualSource === "original" ? "Byte-preserving source placeholder" : "Clean Base + current game metadata"}</p></div>
+              <span className={`status-pill ${studioCard.clean.available ? "ready" : "missing"}`}>{studioCard.clean.available ? "Clean Base ready" : "Clean Base missing"}</span>
             </div>
             <div className="visual-source-switch" role="group" aria-label="Visual Source">
               <button className={visualSource === "original" ? "active" : ""} onClick={() => setVisualSource("original")}>Original / Placeholder</button>
-              <button className={visualSource === "rendered" ? "active" : ""} onClick={() => setVisualSource("rendered")}>Clean / Rendered</button>
+              <button disabled={!studioCard.clean.available} title={!studioCard.clean.available ? "No Clean Base available" : undefined} className={visualSource === "rendered" ? "active" : ""} onClick={() => setVisualSource("rendered")}>{studioCard.clean.available ? "Clean Base / Rendered" : "Clean Base unavailable"}</button>
+              <button className="ghost" disabled={layoutReloadBusy} onClick={() => void reloadLayout()}>{layoutReloadBusy ? "Reloading…" : "Reload Layout"}</button>
             </div>
             {visualSource === "original" && <div className="visual-warning">Original placeholder — embedded text may not match Game Metadata</div>}
             <div className={`studio-preview-frame ${visualSource === "rendered" && !studioCard.clean.available ? "missing" : ""}`}>
@@ -615,7 +1271,7 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
               {visualSource === "rendered" && !studioCard.clean.available && (
                 <div className="clean-missing">
                   <div className="card-glyph">◇</div>
-                  <h3>Clean visual not available</h3>
+                  <h3>Clean Base not available</h3>
                   <p>Import a clean PNG containing only artwork, frame, backgrounds and non-variable decoration.</p>
                   <button className="primary" disabled={actionBusy !== null} onClick={importClean}>{actionBusy === "import" ? "Importing…" : "Select / Import Clean Base PNG"}</button>
                 </div>
@@ -625,12 +1281,12 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
               {previewBusy && <div className="rendering-overlay"><div className="spinner" /><span>Rendering preview…</span></div>}
             </div>
             <div className="studio-preview-meta">
-              <span><b>Clean SHA-256</b><code>{studioCard.clean.sha256 ?? "Available after import"}</code></span>
+              <span><b>Visual state</b><code>{selectedProduction?.original_available ? "Original available" : "Original unavailable"} · {studioCard.clean.available ? `Clean Base ${studioCard.clean.width}×${studioCard.clean.height} (${studioCard.clean.compatibility})` : "Clean Base missing"} · {selectedProduction?.rendered_available ? "Rendered available" : "Rendered missing"}</code></span>
               <span><b>{visualSource === "original" ? "Original" : "Preview"} SHA-256</b><code>{shownPreviewHash ?? "Available after load"}</code></span>
             </div>
             {visualSource === "rendered" && preview?.warnings.length ? <div className="render-warnings"><b>Renderer warnings</b>{preview.warnings.map((warning) => <span key={warning}>{warning}</span>)}</div> : null}
             {!studioCard.clean.available && visualSource === "original" && (
-              <div className="clean-inline-missing"><span><b>Clean visual not available</b><small>Original remains usable as a temporary game visual.</small></span><button className="ghost" disabled={actionBusy !== null} onClick={importClean}>{actionBusy === "import" ? "Importing…" : "Select / Import Clean Base PNG"}</button></div>
+                  <div className="clean-inline-missing"><span><b>Clean Base not available</b><small>Original remains usable as a temporary game visual.</small></span><button className="ghost" disabled={actionBusy !== null} onClick={importClean}>{actionBusy === "import" ? "Importing…" : "Select / Import Clean Base PNG"}</button></div>
             )}
             {studioCard.clean.available && (
               <button className="ghost replace-clean" disabled={actionBusy !== null} onClick={importClean}>{actionBusy === "import" ? "Importing…" : "Replace Clean Base PNG"}</button>
@@ -653,37 +1309,42 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
               <Meta label="Sanity ID" value={studioCard.source.id} mono />
               <Meta label="Local name" value={studioCard.source.local_name} mono />
             </section>
-            <section className="metadata-section game-metadata">
+            <section className="metadata-section game-metadata" inert={editorLockedByRecovery ? true : undefined} aria-disabled={editorLockedByRecovery}>
               <div className="section-title"><div><span className="eyebrow">Visual fields</span><h2>Game Metadata</h2></div><span className={`status-pill ${hasUnsavedChanges ? "missing" : "ready"}`}>{hasUnsavedChanges ? "Unsaved" : studioCard.metadataStatus === "saved" ? "Saved" : "Defaults"}</span></div>
               <div className="identity-note"><code>{draft.id}</code><span>{draft.class} • {draft.part}</span></div>
-              <label className="field"><span>Name</span><input disabled={actionBusy !== null} value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} /></label>
+              <label className="field"><span>Name</span><input data-validation-path="name" disabled={actionBusy !== null} value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} /></label>
               <div className="number-fields">
-                <label className="field"><span>Cost</span><input disabled={actionBusy !== null} type="number" step="1" value={draft.cost ?? ""} placeholder="—" onChange={(event) => updateDraft("cost", event.target.value === "" ? null : Number(event.target.value))} /></label>
-                <label className="field"><span>Value</span><input disabled={actionBusy !== null} type="number" step="1" value={draft.value ?? ""} placeholder="—" onChange={(event) => updateDraft("value", event.target.value === "" ? null : Number(event.target.value))} /></label>
+                <label className="field"><span>Cost</span><input data-validation-path="cost" disabled={actionBusy !== null} type="number" step="1" value={draft.cost ?? ""} placeholder="—" onChange={(event) => updateDraft("cost", event.target.value === "" ? null : Number(event.target.value))} /></label>
+                <label className="field"><span>Value</span><input data-validation-path="value" disabled={actionBusy !== null} type="number" step="1" value={draft.value ?? ""} placeholder="—" onChange={(event) => updateDraft("value", event.target.value === "" ? null : Number(event.target.value))} /></label>
               </div>
-              <label className="field"><span>Card Type</span><input disabled={actionBusy !== null} list="studio-card-types" value={draft.card_type} placeholder="attack, skill, secret, power…" onChange={(event) => updateDraft("card_type", event.target.value)} /><datalist id="studio-card-types"><option value="attack" /><option value="skill" /><option value="secret" /><option value="power" /></datalist></label>
-              <label className="field"><span>Description</span><textarea disabled={actionBusy !== null} rows={5} value={draft.description} placeholder="Visible card description" onChange={(event) => updateDraft("description", event.target.value)} /></label>
+              <label className="field"><span>Card Type</span><input data-validation-path="card_type" disabled={actionBusy !== null} list="studio-card-types" value={draft.card_type} placeholder="attack, skill, secret, power…" onChange={(event) => updateDraft("card_type", event.target.value)} /><datalist id="studio-card-types"><option value="attack" /><option value="skill" /><option value="secret" /><option value="power" /></datalist></label>
+              <label className="field"><span>Description</span><textarea data-validation-path="description" disabled={actionBusy !== null} rows={5} value={draft.description} placeholder="Visible card description" onChange={(event) => updateDraft("description", event.target.value)} /></label>
             </section>
-            <section className="metadata-section gameplay-metadata">
+            <section className="metadata-section gameplay-metadata" inert={editorLockedByRecovery ? true : undefined} aria-disabled={editorLockedByRecovery}>
               <div className="section-title"><div><span className="eyebrow">Structured data</span><h2>Gameplay</h2></div><span className={`status-pill validation-${validation?.status ?? "invalid"}`}>{validation?.status === "valid" ? "Valid" : validation?.status === "warnings" ? "Warnings" : "Invalid"}</span></div>
               <div className="schema-note"><span>Schema</span><code>v{draft.schema_version}</code></div>
               {studioCard.metadataMigrated && <div className="migration-note">Loaded from V1 and migrated in memory. Save Metadata to persist schema_version 2.</div>}
-              <label className="field"><span>Targeting Mode</span><select disabled={actionBusy !== null} value={draft.targeting.mode} onChange={(event) => acceptDraft({ ...draft, targeting: { mode: event.target.value as TargetMode } })}>{TARGET_VOCABULARY.map((mode) => <option key={mode} value={mode}>{mode.replaceAll("_", " ")}</option>)}</select></label>
-              {validation?.issues.length ? <div className={`validation-issues ${validation.status}`}><b>{validation.status === "invalid" ? "Fix before saving" : "Review warnings"}</b>{validation.issues.map((issue, index) => <span key={`${issue.path}-${index}`}><code>{issue.path}</code>{issue.message}</span>)}</div> : null}
+              <div className="editor-productivity"><button className="ghost" disabled={!undoStack.length || actionBusy !== null} onClick={() => restoreHistory("undo")}>Undo <small>Ctrl+Z</small></button><button className="ghost" disabled={!redoStack.length || actionBusy !== null} onClick={() => restoreHistory("redo")}>Redo <small>Ctrl+Y</small></button><button className="ghost" disabled={actionBusy !== null} onClick={copyGameplay}>Copy Gameplay</button><button className="ghost" disabled={!gameplayClipboard || actionBusy !== null} onClick={pasteGameplay}>Paste Gameplay</button></div>
+              <div className="validation-panel">
+                <div className="validation-summary"><span className={validationErrors.length ? "bad" : "good"}><b>{validationErrors.length}</b> Errors</span><span className={validationWarnings.length ? "warn" : "good"}><b>{validationWarnings.length}</b> Warnings</span><span className={selectedProduction?.game_ready && !hasUnsavedChanges ? "good" : "bad"}><b>{selectedProduction?.game_ready && !hasUnsavedChanges ? "Yes" : "No"}</b> Game Ready</span></div>
+                {(validationErrors.length > 0 || validationWarnings.length > 0) && <div className="validation-groups">{validationErrors.length > 0 && <section><b>ERRORS</b>{validationErrors.map((issue, index) => <button key={`error-${issue.path}-${index}`} onClick={() => focusIssue(issue.path)}><code>{issue.path}</code><span>{issue.message}</span></button>)}</section>}{validationWarnings.length > 0 && <section><b>WARNINGS</b>{validationWarnings.map((issue, index) => <button key={`warning-${issue.path}-${index}`} onClick={() => focusIssue(issue.path)}><code>{issue.path}</code><span>{issue.message}</span></button>)}</section>}</div>}
+                {!validationErrors.length && <div className="validation-ready"><b>READY</b><span>Schema V2 is valid{hasUnsavedChanges ? "; save explicitly before export readiness is recalculated." : "."}</span></div>}
+              </div>
+              <label className="field"><span>Targeting Mode</span><select data-validation-path="targeting.mode" disabled={actionBusy !== null} value={draft.targeting.mode} onChange={(event) => acceptDraft({ ...draft, targeting: { mode: event.target.value as TargetMode } })}>{TARGET_VOCABULARY.map((mode) => <option key={mode} value={mode}>{mode.replaceAll("_", " ")}</option>)}</select></label>
               <div className="effects-heading"><div><h3>Effects</h3><small>Execution order is preserved.</small></div><span className="count-pill">{draft.effects.length}</span></div>
               <div className="add-effect-row"><select disabled={actionBusy !== null} value={newEffectType} onChange={(event) => setNewEffectType(event.target.value as EffectType)}>{GAME_EFFECT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}</select><button className="ghost" disabled={actionBusy !== null} onClick={addEffect}>+ Add Effect</button></div>
               <div className="effects-list">
                 {draft.effects.map((effect, index) => (
-                  <article className="effect-card" key={effect.id}>
+                  <article className="effect-card" key={effect.id} data-validation-path={`effects[${index}]`} tabIndex={-1}>
                     <div className="effect-card-heading"><div><span className="effect-order">{index + 1}</span><strong>{effect.type}</strong></div><code title={effect.id}>{effect.id}</code></div>
                     <div className="effect-base-fields">
-                      <label className="field"><span>Type</span><select disabled={actionBusy !== null} value={effect.type} onChange={(event) => changeEffectType(index, event.target.value as EffectType)}>{GAME_EFFECT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
-                      <label className="field"><span>Target</span><select disabled={actionBusy !== null} value={effect.target} onChange={(event) => updateEffect(index, { target: event.target.value as TargetMode })}>{TARGET_VOCABULARY.map((target) => <option key={target} value={target}>{target.replaceAll("_", " ")}</option>)}</select></label>
+                      <label className="field"><span>Type</span><select data-validation-path={`effects[${index}].type`} disabled={actionBusy !== null} value={effect.type} onChange={(event) => changeEffectType(index, event.target.value as EffectType)}>{GAME_EFFECT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
+                      <label className="field"><span>Target</span><select data-validation-path={`effects[${index}].target`} disabled={actionBusy !== null} value={effect.target} onChange={(event) => updateEffect(index, { target: event.target.value as TargetMode })}>{TARGET_VOCABULARY.map((target) => <option key={target} value={target}>{target.replaceAll("_", " ")}</option>)}</select></label>
                     </div>
-                    {(effect.type === "damage" || effect.type === "heal" || effect.type === "shield") && <label className="field"><span>Amount</span><input disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.amount} onChange={(event) => updateEffect(index, { amount: Number(event.target.value) })} /></label>}
-                    {effect.type === "damage" && <label className="field"><span>Hits</span><input disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.hits} onChange={(event) => updateEffect(index, { hits: Number(event.target.value) })} /></label>}
-                    {(effect.type === "buff" || effect.type === "debuff") && <><label className="field"><span>Status</span><input disabled={actionBusy !== null} value={effect.status} placeholder="status key" onChange={(event) => updateEffect(index, { status: event.target.value })} /></label><div className="number-fields"><label className="field"><span>Stacks</span><input disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.stacks} onChange={(event) => updateEffect(index, { stacks: Number(event.target.value) })} /></label><label className="field"><span>Duration</span><input disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.duration} onChange={(event) => updateEffect(index, { duration: Number(event.target.value) })} /></label></div></>}
-                    {effect.type === "cleanse" && <label className="field"><span>Count</span><input disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.count} onChange={(event) => updateEffect(index, { count: Number(event.target.value) })} /></label>}
+                    {(effect.type === "damage" || effect.type === "heal" || effect.type === "shield") && <label className="field"><span>Amount</span><input data-validation-path={`effects[${index}].amount`} disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.amount} onChange={(event) => updateEffect(index, { amount: Number(event.target.value) })} /></label>}
+                    {effect.type === "damage" && <label className="field"><span>Hits</span><input data-validation-path={`effects[${index}].hits`} disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.hits} onChange={(event) => updateEffect(index, { hits: Number(event.target.value) })} /></label>}
+                    {(effect.type === "buff" || effect.type === "debuff") && <><label className="field"><span>Status</span><input data-validation-path={`effects[${index}].status`} disabled={actionBusy !== null} value={effect.status} placeholder="status key" onChange={(event) => updateEffect(index, { status: event.target.value })} /></label><div className="number-fields"><label className="field"><span>Stacks</span><input data-validation-path={`effects[${index}].stacks`} disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.stacks} onChange={(event) => updateEffect(index, { stacks: Number(event.target.value) })} /></label><label className="field"><span>Duration</span><input data-validation-path={`effects[${index}].duration`} disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.duration} onChange={(event) => updateEffect(index, { duration: Number(event.target.value) })} /></label></div></>}
+                    {effect.type === "cleanse" && <label className="field"><span>Count</span><input data-validation-path={`effects[${index}].count`} disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.count} onChange={(event) => updateEffect(index, { count: Number(event.target.value) })} /></label>}
                     <div className="effect-actions"><button className="ghost" disabled={actionBusy !== null || index === 0} onClick={() => applyEffectOperation(() => moveCardEffect(draft, index, "up"))}>Move Up</button><button className="ghost" disabled={actionBusy !== null || index === draft.effects.length - 1} onClick={() => applyEffectOperation(() => moveCardEffect(draft, index, "down"))}>Move Down</button><button className="ghost" disabled={actionBusy !== null} onClick={() => applyEffectOperation(() => duplicateCardEffect(draft, index))}>Duplicate</button><button className="ghost danger" disabled={actionBusy !== null} onClick={() => applyEffectOperation(() => deleteCardEffect(draft, index))}>Delete</button></div>
                   </article>
                 ))}
@@ -692,21 +1353,44 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
               <details className="advanced-json">
                 <summary>Advanced JSON</summary>
                 <p>Edit the complete V2 document. Changes are validated before replacing the current draft.</p>
-                <textarea spellCheck={false} value={advancedText} onChange={(event) => { setAdvancedText(event.target.value); setAdvancedError(null); }} />
+                <textarea data-validation-path="$" spellCheck={false} value={advancedText} onChange={(event) => { setAdvancedText(event.target.value); setAdvancedError(null); }} />
                 {advancedError && <div className="advanced-error">{advancedError}</div>}
                 <button className="ghost" disabled={actionBusy !== null} onClick={applyAdvancedJson}>Apply JSON</button>
               </details>
+              <div className={`draft-status draft-${draftStatus}`}><span>Recovery draft</span><b>{draftStatus === "saving" ? "Saving…" : draftStatus === "saved" ? "Saved separately" : draftStatus === "error" ? "Write failed" : "No pending recovery write"}</b></div>
               <div className="studio-editor-actions">
                 <button className="primary" disabled={actionBusy !== null || validation?.status === "invalid"} onClick={saveMetadata}>{actionBusy === "save" ? "Saving…" : "Save Metadata"}</button>
-                <button className="ghost" disabled={actionBusy !== null || !hasUnsavedChanges} onClick={resetMetadata}>Reset Unsaved Changes</button>
+                <button className="primary save-next" disabled={actionBusy !== null || validation?.status === "invalid" || !navigationEnabled || !nextId} onClick={() => void saveAndNext()}>{actionBusy === "save" ? "Saving…" : "Save & Next"}</button>
+                <button className="ghost" disabled={actionBusy !== null || !hasUnsavedChanges} onClick={() => void resetMetadata()}>Reset Unsaved Changes</button>
                 <button className="ghost export-rendered" disabled={actionBusy !== null || !studioCard.clean.available} onClick={exportRendered}>{actionBusy === "export" ? "Exporting…" : "Export Rendered Card"}</button>
                 <button className="ghost game-export" disabled={actionBusy !== null || validation?.status === "invalid" || (visualSource === "rendered" && !studioCard.clean.available)} onClick={exportGameCard}>{actionBusy === "game-export" ? "Exporting Game Card…" : "Export Game Card"}<small>{visualSource === "original" ? "Original placeholder + V2 JSON" : "Rendered PNG + V2 JSON"}</small></button>
               </div>
+              {currentSet && dashboard && <div className="game-set-export">
+                <div className="section-title"><div><span className="eyebrow">Current Set</span><h2>Export Game Set</h2></div><span className="status-pill">{setExportReady} / {currentSet.cards.length} ready</span></div>
+                <div className="export-plan"><span><b>{currentSet.cards.length}</b>Total</span><span><b>{setExportReady}</b>Game Ready</span><span><b>{setExportWarnings}</b>Warnings</span><span><b>{setExportBlocked}</b>Blocked</span></div>
+              <label className="field"><span>Visual source</span><select value={setExportVisualSource} onChange={(event) => setSetExportVisualSource(event.target.value as VisualSource)}><option value="original">Original / Placeholder</option><option value="rendered">Clean Base / Rendered</option></select></label>
+                {setExportVisualSource === "rendered" && currentSetProduction.some((card) => !card.clean_available) && <div className="visual-warning">Some cards in this set have no real clean visual. They will not be presented as rendered-ready.</div>}
+                <button className="ghost game-export" disabled={productionBusy || setExportReady === 0} onClick={() => void exportGameSet()}>{productionBusy ? "Working…" : "Review Plan & Export"}</button>
+                {gameSetExport && <div className="export-result"><b>Latest result</b><span>{gameSetExport.report.success} success</span><span>{gameSetExport.report.failed} failed</span><span>{gameSetExport.report.skipped} skipped</span><code>{gameSetExport.directory}</code></div>}
+              </div>}
             </section>
           </>
         )}
       </aside>
     </div>
+    {productionDialog && <div className="production-dialog-backdrop" role="presentation">
+      <form className="production-dialog" role="dialog" aria-modal="true" aria-labelledby="production-dialog-title" onSubmit={(event) => { event.preventDefault(); void submitProductionDialog(); }}>
+        <div className="eyebrow">Production workspace</div>
+        <h2 id="production-dialog-title">{dialogTitle}</h2>
+        <p>{dialogDescription}</p>
+        <label className="field"><span>{productionDialog.kind.includes("slot") ? "Axie Slot name" : "Card Set name"}</span>
+          <input autoFocus value={productionDialog.value} onChange={(event) => setProductionDialog({ ...productionDialog, value: event.target.value, error: null })} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setProductionDialog(null); } }} />
+        </label>
+        {productionDialog.error && <div className="dialog-error" role="alert">{productionDialog.error}</div>}
+        <div className="production-dialog-actions"><button type="button" className="ghost" disabled={productionBusy} onClick={() => setProductionDialog(null)}>Cancel</button><button type="submit" className="primary" disabled={productionBusy}>{productionBusy ? "Working…" : dialogSubmitLabel}</button></div>
+      </form>
+    </div>}
+    </>
   );
 }
 

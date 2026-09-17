@@ -12,6 +12,9 @@ export interface CleanAssetState {
   available: boolean;
   path: string;
   sha256: string | null;
+  width: number | null;
+  height: number | null;
+  compatibility: "master" | "legacy" | null;
 }
 
 export interface CardStudioPaths {
@@ -66,6 +69,16 @@ function assertPngStructure(bytes: Uint8Array): void {
     chunkIndex += 1;
   }
   if (!foundIdat || !foundIend) throw new Error("Clean base is not a complete PNG");
+}
+
+function pngDimensions(bytes: Uint8Array): { width: number; height: number } {
+  if (bytes.byteLength < 24) throw new Error("Clean base PNG has no valid IHDR");
+  const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+
+function classifyCleanBase(width: number, height: number): "master" | "legacy" {
+  return width === 1024 && height === 1536 ? "master" : "legacy";
 }
 
 function localIdentity(card: CatalogCard): Pick<CardGameMetadata, "id" | "class" | "part"> {
@@ -159,14 +172,15 @@ export async function getCleanAssetState(card: CatalogCard, root = "."): Promise
   const path = cardStudioPaths(card, root).clean;
   try {
     const bytes = await readFile(path);
-    return { available: true, path, sha256: sha256(bytes) };
+    const { width, height } = pngDimensions(bytes);
+    return { available: true, path, sha256: sha256(bytes), width, height, compatibility: classifyCleanBase(width, height) };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { available: false, path, sha256: null };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { available: false, path, sha256: null, width: null, height: null, compatibility: null };
     throw error;
   }
 }
 
-async function assertPng(bytes: Uint8Array): Promise<void> {
+export async function assertValidPng(bytes: Uint8Array): Promise<void> {
   if (bytes.byteLength < PNG_SIGNATURE.byteLength || PNG_SIGNATURE.some((byte, index) => bytes[index] !== byte)) {
     throw new Error("Clean base is not a valid PNG");
   }
@@ -185,15 +199,22 @@ export async function importCleanBase(
   options: { root?: string; replace?: boolean } = {}
 ): Promise<CleanAssetState> {
   const sourceBytes = await readFile(sourcePath);
-  await assertPng(sourceBytes);
+  await assertValidPng(sourceBytes);
   const target = cardStudioPaths(card, options.root).clean;
   try {
     const existing = await readFile(target);
-    if (existing.equals(sourceBytes)) return { available: true, path: target, sha256: sha256(existing) };
+    if (existing.equals(sourceBytes)) {
+      const { width, height } = pngDimensions(existing);
+      return { available: true, path: target, sha256: sha256(existing), width, height, compatibility: classifyCleanBase(width, height) };
+    }
     if (!options.replace) throw new Error(`Clean asset conflict: ${target} already exists with different contents`);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+  // A different Clean Base invalidates every rendered derivative. Keep this
+  // invariant at the shared import boundary as well as the service wrapper.
+  await rm(cardStudioPaths(card, options.root).rendered, { force: true });
   await atomicWrite(target, sourceBytes);
-  return { available: true, path: target, sha256: sha256(sourceBytes) };
+  const { width, height } = pngDimensions(sourceBytes);
+  return { available: true, path: target, sha256: sha256(sourceBytes), width, height, compatibility: classifyCleanBase(width, height) };
 }

@@ -62,6 +62,16 @@ test("preflights conflicts and never overwrites a different game card", async ()
   assert.deepEqual(new Uint8Array(await readFile(paths.image)), original);
 });
 
+test("blocks a Game Export for an Attack with no explicit gameplay effects", async () => {
+  const root = await mkdtemp(join(tmpdir(), "axie-game-export-invalid-"));
+  const invalid = { ...metadata, value: 30, description: "Deal 30 damage.", effects: [] };
+  await assert.rejects(
+    exportGameCardPackage({ card: source(), metadata: invalid, visualSource: "original", imageBytes: png(), exportRoot: root }),
+    /Attack card requires at least one gameplay effect/iu
+  );
+  await assert.rejects(readFile(join(root, "game_export", "beast", "furball", "card.json")), { code: "ENOENT" });
+});
+
 test("batch game export isolates individual failures and preserves order", async () => {
   const results = await exportGameCardsBatch(
     ["first", "broken", "third"],

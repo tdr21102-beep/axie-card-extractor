@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "id": "catfish",
+  "name": "Catfish",
+  "class": "aqua",
+  "part": "mouth",
+  "cost": 1,
+  "value": 30,
+  "card_type": "attack",
+  "description": "Deal 30 damage aoe",
+  "targeting": {
+    "mode": "all_enemies"
+  },
+  "effects": [],
+  "package_schema_version": 1,
+  "visual": {
+    "source": "original_placeholder",
+    "file": "card.png",
+    "sha256": "29b2d0ae4832d6487b2a04469b4760a9960fda25de5d2d9a150d25a25d69b5fe",
+    "warning": "Embedded text may not match Game Metadata"
+  }
+}

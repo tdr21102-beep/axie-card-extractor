@@ -1,13 +1,47 @@
 import { access, appendFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { dialog, ipcMain, shell } from "electron";
+import {
+  addCardToSet,
+  assignCardToAxieSlot,
+  createAxieSlot,
+  createCardSet,
+  deleteAxieSlot,
+  deleteCardSet,
+  getCardSet,
+  listCardSets,
+  removeCardFromAxieSlot,
+  removeCardFromSet,
+  renameAxieSlot,
+  renameCardSet
+} from "../src/card-sets.ts";
 import type { CatalogCard } from "../src/catalog.ts";
 import { createCatalogLoader } from "../src/catalog-loader.ts";
 import { acquireCardImage } from "../src/downloader.ts";
 import { batchPlan, exportBatch, exportCard } from "../src/exporter.ts";
 import { filterCatalog } from "../src/filters.ts";
+import { exportGameSet } from "../src/game-set-exporter.ts";
 import { IPC, type CatalogPayload } from "../src/ipc-contract.ts";
-import { validateBatchRequest, validateCardId, validateFilters, validateStudioGameExportRequest, validateStudioMetadataRequest } from "../src/ipc-validation.ts";
+import {
+  validateAxieSlotCardRequest,
+  validateAxieSlotCreateRequest,
+  validateAxieSlotRenameRequest,
+  validateAxieSlotRequest,
+  validateBatchRequest,
+  validateCardId,
+  validateCardSetCardRequest,
+  validateCardSetId,
+  validateCardSetNameRequest,
+  validateCardSetRenameRequest,
+  validateFilters,
+  validateGameSetExportRequest,
+  validateProductionDashboardRequest,
+  validateStudioDraftSaveRequest,
+  validateStudioGameExportRequest,
+  validateStudioMetadataRequest
+} from "../src/ipc-validation.ts";
+import { buildProductionDashboard, inspectProductionCard } from "../src/production-status.ts";
+import { discardStudioDraft, loadStudioDraft, saveStudioDraft } from "../src/studio-drafts.ts";
 import { createCardStudioService } from "../src/studio-service.ts";
 
 export interface DesktopPaths {
@@ -168,6 +202,19 @@ export function registerIpc(paths: DesktopPaths): void {
       throw new Error("Could not import the clean visual. Select a valid PNG file.");
     }
   });
+  ipcMain.handle(IPC.studioReloadLayout, async () => {
+    try {
+      const layout = studio.reloadLayout();
+      return {
+        version: layout.version,
+        reference_width: layout.reference_width,
+        reference_height: layout.reference_height
+      };
+    } catch (error) {
+      await log(`studio layout reload: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Could not reload card layout. Fix config/card_layout.json and try again. ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
   ipcMain.handle(IPC.studioRenderPreview, async (_event, requestValue: unknown) => {
     const request = validateStudioMetadataRequest(requestValue);
     const card = await findById(request.cardId);
@@ -201,6 +248,99 @@ export function registerIpc(paths: DesktopPaths): void {
       return await studio.exportGameCard(card, request.metadata, request.visualSource, requireExportRoot());
     } catch (error) {
       await log(`studio game export ${card.id}: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
+  });
+
+  ipcMain.handle(IPC.studioListSets, () => listCardSets(paths.studioRoot));
+  ipcMain.handle(IPC.studioCreateSet, async (_event, requestValue: unknown) => {
+    const request = validateCardSetNameRequest(requestValue);
+    return createCardSet(paths.studioRoot, request.name);
+  });
+  ipcMain.handle(IPC.studioRenameSet, async (_event, requestValue: unknown) => {
+    const request = validateCardSetRenameRequest(requestValue);
+    return renameCardSet(paths.studioRoot, request.setId, request.name);
+  });
+  ipcMain.handle(IPC.studioDeleteSet, async (_event, setIdValue: unknown) => {
+    await deleteCardSet(paths.studioRoot, validateCardSetId(setIdValue));
+  });
+  ipcMain.handle(IPC.studioAddCardToSet, async (_event, requestValue: unknown) => {
+    const request = validateCardSetCardRequest(requestValue);
+    await findById(request.cardId);
+    return addCardToSet(paths.studioRoot, request.setId, request.cardId);
+  });
+  ipcMain.handle(IPC.studioRemoveCardFromSet, async (_event, requestValue: unknown) => {
+    const request = validateCardSetCardRequest(requestValue);
+    return removeCardFromSet(paths.studioRoot, request.setId, request.cardId);
+  });
+  ipcMain.handle(IPC.studioCreateAxieSlot, async (_event, requestValue: unknown) => {
+    const request = validateAxieSlotCreateRequest(requestValue);
+    return createAxieSlot(paths.studioRoot, request.setId, request.name ?? null);
+  });
+  ipcMain.handle(IPC.studioRenameAxieSlot, async (_event, requestValue: unknown) => {
+    const request = validateAxieSlotRenameRequest(requestValue);
+    return renameAxieSlot(paths.studioRoot, request.setId, request.slotId, request.name);
+  });
+  ipcMain.handle(IPC.studioDeleteAxieSlot, async (_event, requestValue: unknown) => {
+    const request = validateAxieSlotRequest(requestValue);
+    return deleteAxieSlot(paths.studioRoot, request.setId, request.slotId);
+  });
+  ipcMain.handle(IPC.studioAssignCardToSlot, async (_event, requestValue: unknown) => {
+    const request = validateAxieSlotCardRequest(requestValue);
+    await findById(request.cardId);
+    return assignCardToAxieSlot(paths.studioRoot, request.setId, request.slotId, request.cardId);
+  });
+  ipcMain.handle(IPC.studioRemoveCardFromSlot, async (_event, requestValue: unknown) => {
+    const request = validateAxieSlotCardRequest(requestValue);
+    return removeCardFromAxieSlot(paths.studioRoot, request.setId, request.slotId, request.cardId);
+  });
+  ipcMain.handle(IPC.studioProductionDashboard, async (_event, requestValue: unknown) => {
+    const request = validateProductionDashboardRequest(requestValue);
+    await ensureCatalog();
+    return buildProductionDashboard({
+      catalog,
+      sets: await listCardSets(paths.studioRoot),
+      currentSetId: request.setId,
+      options: { root: paths.studioRoot, imageCache: paths.imageCache }
+    });
+  });
+  ipcMain.handle(IPC.studioLoadDraft, async (_event, cardIdValue: unknown) => {
+    return loadStudioDraft(await findById(cardIdValue), paths.studioRoot);
+  });
+  ipcMain.handle(IPC.studioSaveDraft, async (_event, requestValue: unknown) => {
+    const request = validateStudioDraftSaveRequest(requestValue);
+    return saveStudioDraft(await findById(request.cardId), request.metadata, paths.studioRoot);
+  });
+  ipcMain.handle(IPC.studioDiscardDraft, async (_event, cardIdValue: unknown) => {
+    await discardStudioDraft(await findById(cardIdValue), paths.studioRoot);
+  });
+  ipcMain.handle(IPC.studioExportGameSet, async (_event, requestValue: unknown) => {
+    const request = validateGameSetExportRequest(requestValue);
+    await ensureCatalog();
+    const set = await getCardSet(paths.studioRoot, request.setId);
+    const cardsById = new Map(catalog.map((card) => [card.id, card]));
+    const candidates = await Promise.all(
+      set.cards.flatMap((cardId) => {
+        const card = cardsById.get(cardId);
+        return card
+          ? [inspectProductionCard(card, { root: paths.studioRoot, imageCache: paths.imageCache }).then((production) => ({ card, production }))]
+          : [];
+      })
+    );
+    try {
+      return await exportGameSet({
+        set,
+        candidates,
+        visualSource: request.visualSource,
+        readyOnly: request.readyOnly,
+        exportRoot: requireExportRoot(),
+        exportOne: async (card, visualSource, temporaryRoot) => {
+          const loaded = await studio.load(card);
+          return studio.exportGameCard(card, loaded.metadata, visualSource, temporaryRoot);
+        }
+      });
+    } catch (error) {
+      await log(`studio set export ${set.id}: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
     }
   });

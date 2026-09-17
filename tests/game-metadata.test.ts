@@ -14,6 +14,7 @@ import {
   parseGameMetadata,
   parseGameMetadataV2,
   parseOrMigrateGameMetadata,
+  validateGameMetadataForGameReady,
   validateGameMetadataDocument,
   validateGameMetadataV2,
   type CardEffect,
@@ -96,6 +97,35 @@ test("reports incomplete but structurally valid metadata as non-blocking warning
   );
   assert.ok(result.issues.every((issue) => issue.severity === "warning"));
   assert.doesNotThrow(() => parseGameMetadataV2(result.metadata));
+});
+
+test("requires explicit gameplay for Attack readiness without inferring it from visual fields", () => {
+  const emptyAttack = {
+    ...complete(),
+    value: 30,
+    description: "Deal 30 damage to all enemies.",
+    effects: []
+  };
+  const structural = validateGameMetadataV2(emptyAttack);
+  assert.equal(structural.status, "warnings");
+  assert.deepEqual(structural.metadata?.effects, []);
+
+  const readiness = validateGameMetadataForGameReady(emptyAttack);
+  assert.equal(readiness.status, "invalid");
+  assert.equal(readiness.metadata, null);
+  assert.ok(readiness.issues.some((issue) => issue.message === "Attack card requires at least one gameplay effect."));
+
+  const validAttack = validateGameMetadataForGameReady({
+    ...emptyAttack,
+    effects: [{ id: "damage_1", type: "damage", target: "all_enemies", amount: 30, hits: 1 }]
+  });
+  assert.equal(validAttack.status, "valid");
+  assert.equal(validAttack.metadata?.effects[0]?.type, "damage");
+  assert.equal((validAttack.metadata?.effects[0] as { amount: number }).amount, 30);
+
+  const nonAttack = validateGameMetadataForGameReady({ ...emptyAttack, card_type: "skill" });
+  assert.equal(nonAttack.status, "warnings");
+  assert.deepEqual(nonAttack.metadata?.effects, []);
 });
 
 test("rejects invalid schema, fields and unknown top-level data", () => {

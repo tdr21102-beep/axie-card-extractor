@@ -3,6 +3,22 @@ import type { BatchReport, ExportedCard, OutputLayout } from "./exporter.ts";
 import type { CatalogFilters } from "./filters.ts";
 import type { CardGameMetadata, CleanAssetState } from "./card-studio.ts";
 import type { GameCardExportResult, GameVisualSource } from "./game-card-exporter.ts";
+import type {
+  AxieSlotCardRequest,
+  AxieSlotCreateRequest,
+  AxieSlotRenameRequest,
+  AxieSlotRequest,
+  CardSetCardRequest,
+  CardSetDocument,
+  CardSetNameRequest,
+  CardSetRenameRequest,
+  GameSetExportRequest,
+  GameSetExportResult,
+  ProductionDashboard,
+  ProductionDashboardRequest,
+  StudioDraftResult,
+  StudioDraftSaveRequest
+} from "./production-contract.ts";
 
 export const IPC = {
   catalogList: "catalog:list",
@@ -18,9 +34,26 @@ export const IPC = {
   studioLoad: "studio:load",
   studioSaveMetadata: "studio:save-metadata",
   studioImportClean: "studio:import-clean",
+  studioReloadLayout: "studio:reload-layout",
   studioRenderPreview: "studio:render-preview",
   studioExportRendered: "studio:export-rendered",
-  studioExportGameCard: "studio:export-game-card"
+  studioExportGameCard: "studio:export-game-card",
+  studioListSets: "studio:list-sets",
+  studioCreateSet: "studio:create-set",
+  studioRenameSet: "studio:rename-set",
+  studioDeleteSet: "studio:delete-set",
+  studioAddCardToSet: "studio:add-card-to-set",
+  studioRemoveCardFromSet: "studio:remove-card-from-set",
+  studioCreateAxieSlot: "studio:create-axie-slot",
+  studioRenameAxieSlot: "studio:rename-axie-slot",
+  studioDeleteAxieSlot: "studio:delete-axie-slot",
+  studioAssignCardToSlot: "studio:assign-card-to-slot",
+  studioRemoveCardFromSlot: "studio:remove-card-from-slot",
+  studioProductionDashboard: "studio:production-dashboard",
+  studioLoadDraft: "studio:load-draft",
+  studioSaveDraft: "studio:save-draft",
+  studioDiscardDraft: "studio:discard-draft",
+  studioExportGameSet: "studio:export-game-set"
 } as const;
 
 export interface CatalogPayload {
@@ -79,6 +112,12 @@ export interface StudioGameExportRequest extends StudioMetadataRequest {
   visualSource: GameVisualSource;
 }
 
+export interface StudioLayoutReloadPayload {
+  version: number;
+  reference_width: number;
+  reference_height: number;
+}
+
 export type StudioGameExportPayload = GameCardExportResult;
 
 export interface DesktopApi {
@@ -95,9 +134,26 @@ export interface DesktopApi {
   loadStudioCard(cardId: string): Promise<StudioCardPayload>;
   saveStudioMetadata(request: StudioMetadataRequest): Promise<StudioCardPayload>;
   importStudioClean(cardId: string): Promise<StudioCardPayload | null>;
+  reloadStudioLayout(): Promise<StudioLayoutReloadPayload>;
   renderStudioPreview(request: StudioMetadataRequest): Promise<StudioPreviewPayload>;
   exportStudioRendered(request: StudioMetadataRequest): Promise<StudioExportPayload>;
   exportStudioGameCard(request: StudioGameExportRequest): Promise<StudioGameExportPayload>;
+  listCardSets(): Promise<CardSetDocument[]>;
+  createCardSet(request: CardSetNameRequest): Promise<CardSetDocument>;
+  renameCardSet(request: CardSetRenameRequest): Promise<CardSetDocument>;
+  deleteCardSet(setId: string): Promise<void>;
+  addCardToSet(request: CardSetCardRequest): Promise<CardSetDocument>;
+  removeCardFromSet(request: CardSetCardRequest): Promise<CardSetDocument>;
+  createAxieSlot(request: AxieSlotCreateRequest): Promise<CardSetDocument>;
+  renameAxieSlot(request: AxieSlotRenameRequest): Promise<CardSetDocument>;
+  deleteAxieSlot(request: AxieSlotRequest): Promise<CardSetDocument>;
+  assignCardToAxieSlot(request: AxieSlotCardRequest): Promise<CardSetDocument>;
+  removeCardFromAxieSlot(request: AxieSlotCardRequest): Promise<CardSetDocument>;
+  getProductionDashboard(request: ProductionDashboardRequest): Promise<ProductionDashboard>;
+  loadStudioDraft(cardId: string): Promise<StudioDraftResult>;
+  saveStudioDraft(request: StudioDraftSaveRequest): Promise<StudioDraftResult>;
+  discardStudioDraft(cardId: string): Promise<void>;
+  exportStudioGameSet(request: GameSetExportRequest): Promise<GameSetExportResult>;
 }
 
 declare global {

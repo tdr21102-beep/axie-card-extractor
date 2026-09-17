@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import type { CatalogCard } from "./catalog.ts";
 import { sha256 } from "./downloader.ts";
 import { classDirectory, snakeCase } from "./naming.ts";
-import { parseGameMetadata, type CardGameMetadata } from "./game-metadata.ts";
+import { assertGameMetadataGameReady, parseGameMetadata, type CardGameMetadata } from "./game-metadata.ts";
 
 export const GAME_CARD_PACKAGE_SCHEMA_VERSION = 1 as const;
 export type GameVisualSource = "original" | "rendered";
@@ -51,6 +51,7 @@ export function gameCardExportPaths(card: CatalogCard, exportRoot: string) {
 
 function buildGameCardDocument(metadataValue: unknown, source: GameVisualSource, imageHash: string): GameCardDocument {
   const metadata = parseGameMetadata(metadataValue);
+  assertGameMetadataGameReady(metadata);
   const visualSource: ExportedGameVisualSource = source === "original" ? "original_placeholder" : "rendered";
   return {
     ...metadata,
@@ -77,6 +78,7 @@ export function validateGameCardDocument(value: unknown): GameCardDocument {
   if (visual.warning !== null && typeof visual.warning !== "string") throw new Error("Invalid game card visual warning");
   const { package_schema_version: _packageVersion, visual: _visual, ...metadataValue } = candidate;
   const metadata = parseGameMetadata(metadataValue);
+  assertGameMetadataGameReady(metadata);
   return {
     ...metadata,
     package_schema_version: GAME_CARD_PACKAGE_SCHEMA_VERSION,

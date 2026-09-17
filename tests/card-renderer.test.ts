@@ -38,8 +38,11 @@ function cloneLayout(layout: CardLayout): CardLayout {
 test("loads and validates the versioned card layout", async () => {
   const layout = loadCardLayout();
   assert.equal(layout.version, 2);
-  assert.equal(layout.reference_width, 900);
+  assert.equal(layout.reference_width, 1024);
+  assert.equal(layout.reference_height, 1536);
   assert.equal(layout.description.max_lines, 4);
+  assert.equal(layout.description.vertical_alignment, "top");
+  assert.equal(layout.card_type_display.attack, "Attack");
 
   const directory = await mkdtemp(join(tmpdir(), "axie-card-layout-"));
   const invalidPath = join(directory, "invalid.json");
@@ -50,7 +53,7 @@ test("loads and validates the versioned card layout", async () => {
     () => parseCardLayout({ ...layout, description: { ...layout.description, width: -1 } }),
     /description\.width/
   );
-  assert.equal(layout.font_asset, null);
+  assert.equal(layout.font_asset, "assets/fonts/minecraft.ttf");
   assert.ok(layout.name.min_font_size < layout.name.font_size);
   assert.throws(() => parseCardLayout({ ...layout, version: 1 }), /layout\.version/);
   assert.throws(() => parseCardLayout({ ...layout, name: { ...layout.name, min_font_size: layout.name.font_size + 1 } }), /min_font_size/);
@@ -103,6 +106,57 @@ test("each editable field contributes to the rendered output", async () => {
     const rendered = await renderCard(clean, variant, layout);
     assert.notEqual(rendered.sha256, baseline.sha256);
   }
+});
+
+test("card type display mapping is visual-only and deterministic", async () => {
+  const layout = loadCardLayout();
+  const clean = cleanPng(1024, 1536);
+  const baseline = await renderCard(clean, metadata, layout);
+  const mapped = await renderCard(clean, metadata, { ...layout, card_type_display: { ...layout.card_type_display, attack: "Strike" } });
+  assert.notEqual(mapped.sha256, baseline.sha256);
+  assert.equal((await renderCard(clean, metadata, { ...layout, card_type_display: { ...layout.card_type_display, attack: "Strike" } })).sha256, mapped.sha256);
+});
+
+test("field height and vertical alignment are honored without changing the clean base", async () => {
+  const layout = cloneLayout(loadCardLayout());
+  layout.name.height = 180;
+  layout.name.vertical_alignment = "bottom";
+  const clean = cleanPng(1024, 1536);
+  const rendered = await renderCard(clean, metadata, layout);
+  assert.notEqual(rendered.sha256, createHash("sha256").update(clean).digest("hex"));
+  assert.deepEqual(clean, cleanPng(1024, 1536));
+});
+
+test("configured font assets fall back safely when not packaged", async () => {
+  const layout = { ...loadCardLayout(), font_asset: "assets/fonts/not-installed.ttf" };
+  const rendered = await renderCard(cleanPng(1024, 1536), metadata, layout);
+  assert.match(rendered.warnings.join("\n"), /fallback/);
+});
+
+test("custom font metrics keep glyph tops inside the configured field", async () => {
+  const layout = loadCardLayout();
+  assert.ok(layout.font_asset, "the project layout must exercise the custom font path");
+  const transparent = createCanvas(1024, 1536);
+  const clean = Uint8Array.from(transparent.toBuffer("image/png"));
+  const costOnly = { ...metadata, value: null, name: "", card_type: "", description: "" };
+  const rendered = await renderCard(clean, costOnly, layout);
+  const image = await loadImage(rendered.bytes);
+  const canvas = createCanvas(image.width, image.height);
+  const context = canvas.getContext("2d", { alpha: true });
+  context.drawImage(image, 0, 0);
+  const pixels = context.getImageData(layout.cost.x, layout.cost.y, layout.cost.width, layout.cost.height).data;
+  let minY = layout.cost.height;
+  let maxY = -1;
+  for (let y = 0; y < layout.cost.height; y += 1) {
+    for (let x = 0; x < layout.cost.width; x += 1) {
+      if (pixels[(y * layout.cost.width + x) * 4 + 3] > 0) {
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+    }
+  }
+  assert.ok(minY <= 1, "the glyph should start at the field top rather than a clipped lower edge");
+  assert.ok(maxY - minY + 1 >= layout.cost.font_size * 0.8, "custom glyph should retain its full vertical extent");
 });
 
 test("deterministically shrinks long descriptions instead of clipping them", async () => {

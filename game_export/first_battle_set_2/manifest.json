@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "set_id": "first_battle_set_2",
+  "set_name": "First Battle Set",
+  "cards": [
+    {
+      "card_id": "catfish",
+      "card_json": "cards/aqua/catfish/card.json",
+      "card_png": "cards/aqua/catfish/card.png",
+      "sha256": "29b2d0ae4832d6487b2a04469b4760a9960fda25de5d2d9a150d25a25d69b5fe",
+      "visual_source": "original_placeholder"
+    },
+    {
+      "card_id": "koi",
+      "card_json": "cards/aqua/koi/card.json",
+      "card_png": "cards/aqua/koi/card.png",
+      "sha256": "8e28ecc769a4a4eb78ccbe696870c8224002910e4edf9ab6b52d77a5ccb23373",
+      "visual_source": "original_placeholder"
+    },
+    {
+      "card_id": "sponge",
+      "card_json": "cards/aqua/sponge/card.json",
+      "card_png": "cards/aqua/sponge/card.png",
+      "sha256": "b5bc80215934d7dac2a53432ba76619c37b8c4f0d17a34b4b8ef16ce035a7c4b",
+      "visual_source": "original_placeholder"
+    },
+    {
+      "card_id": "teal_shell",
+      "card_json": "cards/aqua/teal_shell/card.json",
+      "card_png": "cards/aqua/teal_shell/card.png",
+      "sha256": "619b7f115af3dee9576c69786be09bc2adc796c935de7228b7e7d54cbf7c4625",
+      "visual_source": "original_placeholder"
+    }
+  ],
+  "axies": [
+    {
+      "id": "axie_01",
+      "name": "Axie Slot 1",
+      "cards": [
+        "catfish",
+        "koi",
+        "sponge",
+        "teal_shell"
+      ]
+    }
+  ],
+  "export": {
+    "card_count": 4
+  }
+}

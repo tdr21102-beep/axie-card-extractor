@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "id": "teal_shell",
+  "name": "Teal Shell",
+  "class": "aqua",
+  "part": "horn",
+  "cost": 1,
+  "value": 30,
+  "card_type": "secret",
+  "description": "Shield all allies",
+  "targeting": {
+    "mode": "all_allies"
+  },
+  "effects": [],
+  "package_schema_version": 1,
+  "visual": {
+    "source": "original_placeholder",
+    "file": "card.png",
+    "sha256": "619b7f115af3dee9576c69786be09bc2adc796c935de7228b7e7d54cbf7c4625",
+    "warning": "Embedded text may not match Game Metadata"
+  }
+}
