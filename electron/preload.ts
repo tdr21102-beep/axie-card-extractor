@@ -22,6 +22,7 @@ const api: DesktopApi = {
   renderStudioPreview: (request: StudioMetadataRequest) => ipcRenderer.invoke(IPC.studioRenderPreview, request) as Promise<StudioPreviewPayload>,
   exportStudioRendered: (request: StudioMetadataRequest) => ipcRenderer.invoke(IPC.studioExportRendered, request) as Promise<StudioExportPayload>,
   exportStudioGameCard: (request: StudioGameExportRequest) => ipcRenderer.invoke(IPC.studioExportGameCard, request) as Promise<StudioGameExportPayload>,
+  exportStudioGameCardFlat: (request: StudioGameExportRequest) => ipcRenderer.invoke(IPC.studioExportGameCardFlat, request) as Promise<StudioGameExportPayload>,
   listCardSets: () => ipcRenderer.invoke(IPC.studioListSets) as Promise<CardSetDocument[]>,
   createCardSet: (request: CardSetNameRequest) => ipcRenderer.invoke(IPC.studioCreateSet, request) as Promise<CardSetDocument>,
   renameCardSet: (request: CardSetRenameRequest) => ipcRenderer.invoke(IPC.studioRenameSet, request) as Promise<CardSetDocument>,

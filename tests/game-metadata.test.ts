@@ -204,6 +204,43 @@ test("rejects missing or unsupported effect discriminators", () => {
   assert.ok(unsupported.issues.some((issue) => issue.path === "effects[0].type"));
 });
 
+test("splash damage keeps one primary target and explicit adjacent-enemy distribution", () => {
+  const splash = {
+    id: "splash_damage_1", type: "splash_damage", target: "selected", amount: 40,
+    splash_ratio: 0.5, target_scope: "other_enemies", distribution: { mode: "adjacent" }
+  };
+  const parsed = parseGameMetadataV2({ ...complete(), targeting: { mode: "single_enemy" }, effects: [splash] });
+  assert.deepEqual(parsed.effects[0], splash);
+  assert.notEqual((parsed.effects[0] as typeof splash).distribution, splash.distribution);
+  const duplicated = duplicateCardEffect(parsed, "splash_damage_1");
+  assert.notEqual(duplicated.effects[1], duplicated.effects[0]);
+  assert.notEqual((duplicated.effects[1] as typeof splash).distribution, (duplicated.effects[0] as typeof splash).distribution);
+  assert.deepEqual(addCardEffect({ ...complete(), effects: [] }, "splash_damage").effects[0], {
+    ...splash, target: "single_enemy", amount: 1, splash_ratio: 0.5
+  });
+  assert.equal(validateGameMetadataV2({ ...complete(), effects: [
+    { id: "damage_1", type: "damage", target: "all_enemies", amount: 20, hits: 2 },
+    { id: "heal_1", type: "heal", target: "single_ally", amount: 10 },
+    { id: "cleanse_1", type: "cleanse", target: "self", count: 1 }
+  ] }).status, "valid");
+});
+
+test("splash damage rejects collective targets, invalid ratios and unsupported distributions", () => {
+  const splash = {
+    id: "splash_damage_1", type: "splash_damage", target: "all_enemies", amount: 0,
+    splash_ratio: 0, target_scope: "all_enemies", distribution: { mode: "uniform", weight: 1 }, hits: 2
+  };
+  const invalid = validateGameMetadataV2({ ...complete(), targeting: { mode: "all_enemies" }, effects: [splash] });
+  assert.equal(invalid.status, "invalid");
+  for (const path of ["targeting.mode", "effects[0].target", "effects[0].amount", "effects[0].splash_ratio", "effects[0].target_scope", "effects[0].distribution.mode", "effects[0].distribution.weight", "effects[0].hits"]) {
+    assert.ok(invalid.issues.some((issue) => issue.path === path), `missing ${path}`);
+  }
+  for (const ratio of [-0.1, 1.01, NaN, Infinity, "0.5"]) {
+    const result = validateGameMetadataV2({ ...complete(), effects: [{ ...splash, target: "selected", amount: 10, splash_ratio: ratio, target_scope: "other_enemies", distribution: { mode: "adjacent" }, hits: undefined }] });
+    assert.ok(result.issues.some((issue) => issue.path === "effects[0].splash_ratio"), `ratio ${ratio}`);
+  }
+});
+
 test("migrates V1 deterministically in memory and parseOrMigrate handles both schemas", () => {
   const original = structuredClone(v1);
   const first = migrateGameMetadataV1(v1);

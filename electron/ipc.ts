@@ -251,6 +251,16 @@ export function registerIpc(paths: DesktopPaths): void {
       throw error;
     }
   });
+  ipcMain.handle(IPC.studioExportGameCardFlat, async (_event, requestValue: unknown) => {
+    const request = validateStudioGameExportRequest(requestValue);
+    const card = await findById(request.cardId);
+    try {
+      return await studio.exportIndividualGameCardFlat(card, request.metadata, request.visualSource, requireExportRoot());
+    } catch (error) {
+      await log(`studio flat game export ${card.id}: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
+  });
 
   ipcMain.handle(IPC.studioListSets, () => listCardSets(paths.studioRoot));
   ipcMain.handle(IPC.studioCreateSet, async (_event, requestValue: unknown) => {

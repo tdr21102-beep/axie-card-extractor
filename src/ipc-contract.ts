@@ -38,6 +38,7 @@ export const IPC = {
   studioRenderPreview: "studio:render-preview",
   studioExportRendered: "studio:export-rendered",
   studioExportGameCard: "studio:export-game-card",
+  studioExportGameCardFlat: "studio:export-game-card-flat",
   studioListSets: "studio:list-sets",
   studioCreateSet: "studio:create-set",
   studioRenameSet: "studio:rename-set",
@@ -138,6 +139,7 @@ export interface DesktopApi {
   renderStudioPreview(request: StudioMetadataRequest): Promise<StudioPreviewPayload>;
   exportStudioRendered(request: StudioMetadataRequest): Promise<StudioExportPayload>;
   exportStudioGameCard(request: StudioGameExportRequest): Promise<StudioGameExportPayload>;
+  exportStudioGameCardFlat(request: StudioGameExportRequest): Promise<StudioGameExportPayload>;
   listCardSets(): Promise<CardSetDocument[]>;
   createCardSet(request: CardSetNameRequest): Promise<CardSetDocument>;
   renameCardSet(request: CardSetRenameRequest): Promise<CardSetDocument>;

@@ -51,13 +51,16 @@ The initial vocabulary is `self`, `selected`, `single_enemy`, `single_ally`, `al
 Every effect has a unique stable `id`, a discriminating `type`, a `target`, and only its type-specific fields:
 
 - `damage`: positive integer `amount` and integer `hits >= 1`.
+- `splash_damage`: positive integer primary `amount`, individual enemy `target` (`selected` or `single_enemy`), `splash_ratio` in the finite range `0 < ratio <= 1`, `target_scope: "other_enemies"`, and `distribution: { "mode": "adjacent" }`. The card's `targeting.mode` must also be individual (`selected` or `single_enemy`). The primary target receives `amount`; each eligible enemy adjacent to that primary target is described by the ratio of the primary amount. The game resolves enemy positions, damage rounding, and combat modifiers; Card Studio only validates and exports this declarative policy. Future distribution modes require an explicit schema/validator extension.
 - `heal`: positive integer `amount`.
 - `shield`: positive integer `amount`.
 - `buff`: non-empty `status`, integer `stacks >= 1`, integer `duration >= 1`.
 - `debuff`: non-empty `status`, integer `stacks >= 1`, integer `duration >= 1`.
-- `cleanse`: integer `count >= 1`.
+- `cleanse`: integer `count >= 1`; the count is the maximum number of debuff stacks removed **per resolved target**. It is not effect repetition, hits, or an instruction to repeat another effect. Runtime selection (including randomness) belongs to the consumer.
 
 The discriminated union can gain `poison`, `rage`, `feathers`, `bubbles`, or other types in later schema revisions without adding irrelevant nullable fields to existing effects. This version does not implement those mechanics.
+
+`damage` with `targeting.mode: "all_enemies"` is area-of-effect (AOE). `splash_damage` is intentionally different: it resolves one individual primary enemy and derives a secondary pool only for `other_enemies`; the primary target is excluded. Card Studio serializes the policy but does not execute target selection, rounding, weighting, or combat modifiers.
 
 ## V1 compatibility
 
@@ -65,31 +68,32 @@ A legacy JSON without `schema_version`, `targeting`, or `effects` is treated as 
 
 ## Game export package
 
-`Export Game Card` writes:
+The individual `Export Game Card` action writes two flat files directly in the selected export folder:
 
 ```text
-<export_root>/game_export/<class>/<card_id>/
-├── card.png
-└── card.json
+<export_root>/<snake_case_id>.png
+<export_root>/<snake_case_id>.json
 ```
 
-`card.json` contains all V2 fields plus:
+For `furball`, the JSON contains all V2 fields plus:
 
 ```json
 {
   "package_schema_version": 1,
   "visual": {
     "source": "original_placeholder",
-    "file": "card.png",
+    "file": "furball.png",
     "sha256": "<64 lowercase hex characters>",
     "warning": "Embedded text may not match Game Metadata"
   }
 }
 ```
 
-`visual.source` is `original_placeholder` when `card.png` is a byte-identical copy of the Sanity original, or `rendered` when it is the deterministic composition of a clean asset plus visual metadata. Godot should verify `visual.sha256`, treat `visual.file` as package-relative, and consume gameplay only from the structured V2 fields.
+`visual.source` is `original_placeholder` when the PNG is a byte-identical copy of the Sanity original, or `rendered` when it is the deterministic composition of a clean asset plus visual metadata. Godot should verify `visual.sha256`, treat `visual.file` as the flat filename, and consume gameplay only from the structured V2 fields.
 
-Both files are conflict-safe: an identical existing package is skipped, while different existing bytes are reported as a conflict rather than overwritten.
+Both flat files are conflict-safe: an identical existing export is skipped, while different existing bytes are reported as a conflict rather than overwritten.
+
+Identical reruns are skipped and different existing bytes conflict. This flat path does not change the nested package used by Game Set export.
 
 ## Production documents (Card Studio V3)
 

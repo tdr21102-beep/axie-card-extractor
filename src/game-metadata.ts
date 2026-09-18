@@ -11,7 +11,7 @@ export const TARGET_VOCABULARY = [
 
 export type TargetVocabulary = (typeof TARGET_VOCABULARY)[number];
 
-export const EFFECT_TYPES = ["damage", "heal", "shield", "buff", "debuff", "cleanse"] as const;
+export const EFFECT_TYPES = ["damage", "splash_damage", "heal", "shield", "buff", "debuff", "cleanse"] as const;
 export type CardEffectType = (typeof EFFECT_TYPES)[number];
 
 export interface CardTargeting {
@@ -28,6 +28,15 @@ export interface DamageEffect extends CardEffectBase {
   type: "damage";
   amount: number;
   hits: number;
+}
+
+export interface SplashDamageEffect extends CardEffectBase {
+  type: "splash_damage";
+  target: "selected" | "single_enemy";
+  amount: number;
+  splash_ratio: number;
+  target_scope: "other_enemies";
+  distribution: { mode: "adjacent" };
 }
 
 export interface HealEffect extends CardEffectBase {
@@ -61,6 +70,7 @@ export interface CleanseEffect extends CardEffectBase {
 
 export type CardEffect =
   | DamageEffect
+  | SplashDamageEffect
   | HealEffect
   | ShieldEffect
   | BuffEffect
@@ -69,6 +79,7 @@ export type CardEffect =
 
 export type NewCardEffect =
   | Omit<DamageEffect, "id">
+  | Omit<SplashDamageEffect, "id">
   | Omit<HealEffect, "id">
   | Omit<ShieldEffect, "id">
   | Omit<BuffEffect, "id">
@@ -161,6 +172,7 @@ const TOP_LEVEL_KEYS = new Set([
 ]);
 const EFFECT_KEYS: Record<CardEffectType, ReadonlySet<string>> = {
   damage: new Set(["id", "type", "target", "amount", "hits"]),
+  splash_damage: new Set(["id", "type", "target", "amount", "splash_ratio", "target_scope", "distribution"]),
   heal: new Set(["id", "type", "target", "amount"]),
   shield: new Set(["id", "type", "target", "amount"]),
   buff: new Set(["id", "type", "target", "status", "stacks", "duration"]),
@@ -255,6 +267,26 @@ function readTarget(value: unknown, path: string, issues: GameMetadataValidation
   return value as TargetVocabulary;
 }
 
+function readSplashRatio(value: unknown, path: string, issues: GameMetadataValidationIssue[]): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > 1) {
+    addIssue(issues, path, "Must be a finite ratio greater than 0 and at most 1");
+    return 1;
+  }
+  return value;
+}
+
+function readSplashDistribution(value: unknown, path: string, issues: GameMetadataValidationIssue[]): SplashDamageEffect["distribution"] {
+  if (!isRecord(value)) {
+    addIssue(issues, path, "Must be an object");
+    return { mode: "adjacent" };
+  }
+  checkExactKeys(value, new Set(["mode"]), path, issues);
+  if (value.mode !== "adjacent") {
+    addIssue(issues, `${path}.mode`, "Must be adjacent");
+  }
+  return { mode: "adjacent" };
+}
+
 function parseEffect(value: unknown, index: number, issues: GameMetadataValidationIssue[]): CardEffect | null {
   const path = `effects[${index}]`;
   if (!isRecord(value)) {
@@ -285,6 +317,22 @@ function parseEffect(value: unknown, index: number, issues: GameMetadataValidati
         amount: readPositiveInteger(value, "amount", `${path}.amount`, issues),
         hits: readPositiveInteger(value, "hits", `${path}.hits`, issues)
       };
+    case "splash_damage":
+      if (target !== "selected" && target !== "single_enemy") {
+        addIssue(issues, `${path}.target`, "Must select one individual enemy: selected or single_enemy");
+      }
+      if (value.target_scope !== "other_enemies") {
+        addIssue(issues, `${path}.target_scope`, "Must be other_enemies");
+      }
+      return {
+        id,
+        type,
+        target: target === "single_enemy" ? "single_enemy" : "selected",
+        amount: readPositiveInteger(value, "amount", `${path}.amount`, issues),
+        splash_ratio: readSplashRatio(value.splash_ratio, `${path}.splash_ratio`, issues),
+        target_scope: "other_enemies",
+        distribution: readSplashDistribution(value.distribution, `${path}.distribution`, issues)
+      };
     case "heal":
       return { id, type, target, amount: readPositiveInteger(value, "amount", `${path}.amount`, issues) };
     case "shield":
@@ -305,7 +353,9 @@ function parseEffect(value: unknown, index: number, issues: GameMetadataValidati
 }
 
 function cloneEffect(effect: CardEffect): CardEffect {
-  return { ...effect };
+  return effect.type === "splash_damage"
+    ? { ...effect, distribution: { ...effect.distribution } }
+    : { ...effect };
 }
 
 export function cloneGameMetadata(metadata: CardGameMetadata): CardGameMetadata {
@@ -404,6 +454,9 @@ export function validateGameMetadataV2(value: unknown): GameMetadataValidationRe
 
   const firstIndexById = new Map<string, number>();
   for (const [index, effect] of effects.entries()) {
+    if (effect.type === "splash_damage" && targeting.mode !== "selected" && targeting.mode !== "single_enemy") {
+      addIssue(issues, "targeting.mode", "Splash damage requires individual enemy targeting: selected or single_enemy");
+    }
     const firstIndex = firstIndexById.get(effect.id);
     if (firstIndex !== undefined) {
       addIssue(issues, `effects[${index}].id`, `Duplicates effects[${firstIndex}].id`);
@@ -577,6 +630,7 @@ function requireEffectIndex(metadata: CardGameMetadata, effectId: string): numbe
 function defaultNewEffect(type: CardEffectType, target: TargetVocabulary): NewCardEffect {
   switch (type) {
     case "damage": return { type, target, amount: 1, hits: 1 };
+    case "splash_damage": return { type, target: target === "single_enemy" ? "single_enemy" : "selected", amount: 1, splash_ratio: 0.5, target_scope: "other_enemies", distribution: { mode: "adjacent" } };
     case "heal": return { type, target, amount: 1 };
     case "shield": return { type, target, amount: 1 };
     case "buff": return { type, target, status: "status", stacks: 1, duration: 1 };
@@ -640,7 +694,7 @@ export function duplicateCardEffect(
   const current = cloneGameMetadata(metadata);
   const sourceIndex = effectIndex(current, effectIdOrIndex);
   const source = current.effects[sourceIndex]!;
-  const duplicate = { ...source, id: nextEffectId(source.type, current.effects) };
+  const duplicate = { ...cloneEffect(source), id: nextEffectId(source.type, current.effects) };
   const effects = current.effects.map(cloneEffect);
   effects.splice(sourceIndex + 1, 0, duplicate);
   return { ...current, effects };

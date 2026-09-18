@@ -94,6 +94,11 @@ test("studio service exports original placeholder bytes without requiring a clea
   assert.deepEqual(new Uint8Array(await readFile(exported.image_path)), original);
   assert.equal(sha256(original), before);
   assert.equal(exported.document.effects[0]?.type, "damage");
+  const flat = await service.exportIndividualGameCardFlat(source, metadata, "original", root);
+  assert.equal(flat.image_path, join(root, "furball.png"));
+  assert.equal(flat.metadata_path, join(root, "furball.json"));
+  assert.equal(flat.document.visual.file, "furball.png");
+  assert.deepEqual(new Uint8Array(await readFile(flat.image_path)), original);
 });
 
 test("studio service reloads layout from disk and retains the last valid layout after invalid edits", async () => {

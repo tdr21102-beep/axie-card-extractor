@@ -100,15 +100,14 @@ Effects iniciales: `damage`, `heal`, `shield`, `buff`, `debuff` y `cleanse`. Tar
 
 **Visual Source** permite elegir `Original / Placeholder` o `Clean Base / Rendered`. El original se obtiene desde la misma capa RAW/cache y nunca recibe metadata superpuesta; la UI advierte que su texto horneado puede no coincidir con Game Metadata. Clean Base/Rendered conserva el renderer desacoplado de `effects`.
 
-**Export Game Card** genera un paquete conflict-safe y determinista:
+**Export Game Card** genera dos archivos conflict-safe y deterministas directamente en la carpeta elegida:
 
 ```text
-<export_root>/game_export/<class>/<card_id>/
-├── card.png
-└── card.json
+<export_root>/<snake_case_id>.png
+<export_root>/<snake_case_id>.json
 ```
 
-En modo placeholder, `card.png` es byte-identical al original. `card.json` contiene Game Metadata V2 y un bloque `visual` con source, filename y SHA-256. El contrato estable para un futuro importador Godot está documentado en `docs/game_card_schema.md`; este proyecto no modifica ni ejecuta Godot.
+En modo placeholder, el PNG es byte-identical al original. El JSON contiene Game Metadata V2 y un bloque `visual` con source, filename y SHA-256. El contrato estable para un futuro importador Godot está documentado en `docs/game_card_schema.md`; este proyecto no modifica ni ejecuta Godot. **Export Game Set** conserva su estructura anidada independiente.
 
 El layout usa `config/card_layout.json` v2 en espacio lógico master 1024×1536 (2:3), con `height`, alineación vertical, `max_width`, `min_font_size` y fitting determinista. Assets legacy 2:3 siguen siendo compatibles y conservan sus dimensiones de salida. Name y Description reducen la fuente hasta el mínimo configurado; si el texto importante aún no entra, el renderer devuelve un error explícito en vez de truncarlo silenciosamente. `card_type_display` permite mapear el tipo gameplay a una etiqueta visible sin modificar metadata. `config/card_types.json` prepara style keys y referencias futuras a iconos sin descargar assets. `assets/fonts/` reserva el slot para una fuente empaquetada futura; si falta, se usa la familia fallback configurada.
 

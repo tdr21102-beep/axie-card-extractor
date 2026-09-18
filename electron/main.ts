@@ -189,7 +189,7 @@ function installSmokeCheck(window: BrowserWindow): void {
               originalPreviewHash = originalHash();
               document.querySelector(".studio-editor-actions .game-export")?.click();
               stage = 20;
-            } else if (stage === 20 && (text.includes("Game card package exported") || text.includes("Identical game card package"))) {
+            } else if (stage === 20 && (text.includes("Game card exported") || text.includes("Identical game card files"))) {
               selectCard("Ant");
               stage = 21;
             } else if (stage === 21 && selectedCardName() === "Ant" && editorReady) {

@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { CatalogCard } from "./catalog.ts";
 import { acquireCardImage } from "./downloader.ts";
-import { exportGameCardPackage, type GameVisualSource } from "./game-card-exporter.ts";
+import { exportGameCardPackage, exportIndividualGameCard, type GameVisualSource } from "./game-card-exporter.ts";
 import {
   assertValidPng,
   assertMetadataIdentity,
@@ -111,7 +111,13 @@ export function createCardStudioService(options: CardStudioServiceOptions) {
     return { path, sha256: rendered.sha256, cleanSha256: rendered.cleanSha256, warnings: rendered.warnings };
   };
 
-  const exportGameCard = async (card: CatalogCard, metadata: CardGameMetadata, visualSource: GameVisualSource, exportRoot: string) => {
+  const exportGameCardWith = async (
+    card: CatalogCard,
+    metadata: CardGameMetadata,
+    visualSource: GameVisualSource,
+    exportRoot: string,
+    write: typeof exportGameCardPackage
+  ) => {
     const validated = parseGameMetadata(metadata);
     assertMetadataIdentity(validated, card);
     // Block invalid gameplay before fetching a source image or rendering. Draft
@@ -129,8 +135,14 @@ export function createCardStudioService(options: CardStudioServiceOptions) {
     } else {
       throw new Error("Invalid game visual source");
     }
-    return exportGameCardPackage({ card, metadata: validated, visualSource, imageBytes, exportRoot });
+    return write({ card, metadata: validated, visualSource, imageBytes, exportRoot });
   };
+
+  const exportGameCard = (card: CatalogCard, metadata: CardGameMetadata, visualSource: GameVisualSource, exportRoot: string) =>
+    exportGameCardWith(card, metadata, visualSource, exportRoot, exportGameCardPackage);
+
+  const exportIndividualGameCardFlat = (card: CatalogCard, metadata: CardGameMetadata, visualSource: GameVisualSource, exportRoot: string) =>
+    exportGameCardWith(card, metadata, visualSource, exportRoot, exportIndividualGameCard);
 
   return {
     load,
@@ -139,6 +151,7 @@ export function createCardStudioService(options: CardStudioServiceOptions) {
     render,
     exportRendered,
     exportGameCard,
+    exportIndividualGameCardFlat,
     reloadLayout,
     get layout() { return layout; }
   };

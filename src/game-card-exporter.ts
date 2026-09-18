@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { link, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import type { CatalogCard } from "./catalog.ts";
 import { sha256 } from "./downloader.ts";
 import { classDirectory, snakeCase } from "./naming.ts";
@@ -12,7 +12,7 @@ export type ExportedGameVisualSource = "original_placeholder" | "rendered";
 
 export interface GameCardVisualReference {
   source: ExportedGameVisualSource;
-  file: "card.png";
+  file: string;
   sha256: string;
   warning: string | null;
 }
@@ -49,7 +49,14 @@ export function gameCardExportPaths(card: CatalogCard, exportRoot: string) {
   return { directory, image: resolve(directory, "card.png"), metadata: resolve(directory, "card.json") };
 }
 
-function buildGameCardDocument(metadataValue: unknown, source: GameVisualSource, imageHash: string): GameCardDocument {
+export function gameCardFlatExportPaths(card: CatalogCard, exportRoot: string) {
+  const cardId = snakeCase(card.local_name);
+  if (!cardId) throw new Error("Card has no valid local name for game export");
+  const directory = resolve(exportRoot);
+  return { directory, image: resolve(directory, `${cardId}.png`), metadata: resolve(directory, `${cardId}.json`) };
+}
+
+function buildGameCardDocument(metadataValue: unknown, source: GameVisualSource, imageHash: string, imageFile: string): GameCardDocument {
   const metadata = parseGameMetadata(metadataValue);
   assertGameMetadataGameReady(metadata);
   const visualSource: ExportedGameVisualSource = source === "original" ? "original_placeholder" : "rendered";
@@ -58,7 +65,7 @@ function buildGameCardDocument(metadataValue: unknown, source: GameVisualSource,
     package_schema_version: GAME_CARD_PACKAGE_SCHEMA_VERSION,
     visual: {
       source: visualSource,
-      file: "card.png",
+      file: imageFile,
       sha256: imageHash,
       warning: source === "original" ? "Embedded text may not match Game Metadata" : null
     }
@@ -72,19 +79,22 @@ export function validateGameCardDocument(value: unknown): GameCardDocument {
   if (!candidate.visual || typeof candidate.visual !== "object" || Array.isArray(candidate.visual)) throw new Error("Invalid game card visual reference");
   const visual = candidate.visual as Record<string, unknown>;
   if (visual.source !== "original_placeholder" && visual.source !== "rendered") throw new Error("Invalid game card visual source");
-  if (visual.file !== "card.png" || typeof visual.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(visual.sha256)) {
+  if (typeof visual.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(visual.sha256)) {
     throw new Error("Invalid game card visual file or SHA-256");
   }
   if (visual.warning !== null && typeof visual.warning !== "string") throw new Error("Invalid game card visual warning");
   const { package_schema_version: _packageVersion, visual: _visual, ...metadataValue } = candidate;
   const metadata = parseGameMetadata(metadataValue);
   assertGameMetadataGameReady(metadata);
+  if (visual.file !== "card.png" && visual.file !== `${snakeCase(metadata.id)}.png`) {
+    throw new Error("Invalid game card visual file");
+  }
   return {
     ...metadata,
     package_schema_version: GAME_CARD_PACKAGE_SCHEMA_VERSION,
     visual: {
       source: visual.source,
-      file: "card.png",
+      file: visual.file,
       sha256: visual.sha256,
       warning: visual.warning
     }
@@ -141,20 +151,21 @@ async function writeNewOrIdentical(path: string, expected: Uint8Array): Promise<
   }
 }
 
-export async function exportGameCardPackage(input: {
+interface GameCardExportInput {
   card: CatalogCard;
   metadata: unknown;
   visualSource: GameVisualSource;
   imageBytes: Uint8Array;
   exportRoot: string;
-}): Promise<GameCardExportResult> {
+}
+
+async function exportGameCardToPaths(input: GameCardExportInput, paths: ReturnType<typeof gameCardExportPaths>): Promise<GameCardExportResult> {
   if (input.visualSource !== "original" && input.visualSource !== "rendered") throw new Error("Invalid game visual source");
   const imageBytes = Uint8Array.from(input.imageBytes);
   if (imageBytes.byteLength === 0) throw new Error("Game card image is empty");
   const imageHash = sha256(imageBytes);
-  const document = buildGameCardDocument(input.metadata, input.visualSource, imageHash);
+  const document = buildGameCardDocument(input.metadata, input.visualSource, imageHash, basename(paths.image));
   const jsonBytes = Buffer.from(`${JSON.stringify(document, null, 2)}\n`, "utf8");
-  const paths = gameCardExportPaths(input.card, input.exportRoot);
 
   // Preflight both outputs so a known conflict never leaves half a package behind.
   const [imageState, metadataState] = await Promise.all([
@@ -172,6 +183,15 @@ export async function exportGameCardPackage(input: {
     visual_source: document.visual.source,
     document
   };
+}
+
+export async function exportGameCardPackage(input: GameCardExportInput): Promise<GameCardExportResult> {
+  return exportGameCardToPaths(input, gameCardExportPaths(input.card, input.exportRoot));
+}
+
+/** Individual exports are flat; Game Set exports continue to use card packages. */
+export async function exportIndividualGameCard(input: GameCardExportInput): Promise<GameCardExportResult> {
+  return exportGameCardToPaths(input, gameCardFlatExportPaths(input.card, input.exportRoot));
 }
 
 export interface GameBatchItemResult {

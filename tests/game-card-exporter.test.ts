@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createCanvas } from "@napi-rs/canvas";
 import { toCatalogCard } from "../src/catalog.ts";
 import { sha256 } from "../src/downloader.ts";
-import { exportGameCardPackage, exportGameCardsBatch, gameCardExportPaths, validateGameCardDocument } from "../src/game-card-exporter.ts";
+import { exportGameCardPackage, exportGameCardsBatch, exportIndividualGameCard, gameCardExportPaths, gameCardFlatExportPaths, validateGameCardDocument } from "../src/game-card-exporter.ts";
 import type { CardGameMetadata } from "../src/game-metadata.ts";
 import { card } from "./fixtures.ts";
 
@@ -60,6 +60,38 @@ test("preflights conflicts and never overwrites a different game card", async ()
     /conflict/i
   );
   assert.deepEqual(new Uint8Array(await readFile(paths.image)), original);
+});
+
+test("individual Game Card Export writes flat id-named files with exact visual reference", async () => {
+  const root = await mkdtemp(join(tmpdir(), "axie-game-flat-"));
+  const original = png();
+  const paths = gameCardFlatExportPaths(source(), root);
+  assert.equal(paths.image, join(root, "furball.png"));
+  assert.equal(paths.metadata, join(root, "furball.json"));
+  const first = await exportIndividualGameCard({ card: source(), metadata, visualSource: "original", imageBytes: original, exportRoot: root });
+  assert.equal(first.status, "success");
+  assert.equal(first.directory, root);
+  assert.deepEqual(new Uint8Array(await readFile(paths.image)), original);
+  assert.equal(first.document.visual.file, "furball.png");
+  assert.equal(first.document.visual.sha256, sha256(await readFile(paths.image)));
+  assert.deepEqual(validateGameCardDocument(JSON.parse(await readFile(paths.metadata, "utf8"))), first.document);
+  assert.equal((await exportIndividualGameCard({ card: source(), metadata, visualSource: "original", imageBytes: original, exportRoot: root })).status, "skipped");
+  await assert.rejects(exportIndividualGameCard({ card: source(), metadata, visualSource: "original", imageBytes: png("#123456"), exportRoot: root }), /conflict/i);
+  assert.deepEqual(new Uint8Array(await readFile(paths.image)), original);
+  await writeFile(paths.metadata, "different metadata");
+  await assert.rejects(exportIndividualGameCard({ card: source(), metadata, visualSource: "original", imageBytes: original, exportRoot: root }), /conflict/i);
+  assert.deepEqual(new Uint8Array(await readFile(paths.image)), original);
+});
+
+test("individual flat rendered export preserves rendered bytes and source metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "axie-game-flat-rendered-"));
+  const rendered = png("#225577");
+  const result = await exportIndividualGameCard({ card: source(), metadata, visualSource: "rendered", imageBytes: rendered, exportRoot: root });
+  assert.equal(result.document.visual.source, "rendered");
+  assert.equal(result.document.visual.file, "furball.png");
+  assert.equal(result.document.visual.warning, null);
+  assert.deepEqual(new Uint8Array(await readFile(join(root, "furball.png"))), rendered);
+  assert.equal(result.document.visual.sha256, sha256(await readFile(join(root, "furball.png"))));
 });
 
 test("blocks a Game Export for an Attack with no explicit gameplay effects", async () => {
