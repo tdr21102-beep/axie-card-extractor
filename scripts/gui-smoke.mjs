@@ -84,7 +84,7 @@ if (savedMetadata.schema_version !== 2 || savedMetadata.effects?.[0]?.type !== "
 if (report.amount !== "20" || report.initialHits !== "2" || report.editedHits !== "3") {
   throw new Error("GUI did not demonstrate the Damage amount 20, Hits 2→3 flow");
 }
-if (report.setId !== "first_battle_set" || report.slotId !== "axie_01" || !report.saveAndNext || !report.gameSetExported || !report.browserControlsVisible || !report.allCardsCountVerified || !report.searchResultVisible || !report.searchResultClickable || !report.listFirstReachable || !report.listLastReachable || !report.cardListScrolled || !report.layoutReloaded) {
+if (report.setId !== "first_battle_set" || report.slotId !== "axie_01" || !report.saveAndNext || !report.gameSetExported || !report.browserControlsVisible || !report.allCardsCountVerified || !report.searchResultVisible || !report.searchResultClickable || !report.listFirstReachable || !report.listLastReachable || !report.cardListScrolled || !report.layoutReloaded || !report.dialogInteractionRecovered) {
   throw new Error("GUI did not complete the V3 Set/Slot/Save & Next/Game Set export flow");
 }
 const savedAntMetadata = JSON.parse(await readFile(antMetadataPath, "utf8"));
@@ -113,7 +113,7 @@ if (setManifest.schema_version !== 1 || setManifest.cards.length !== 2 || setMan
 console.log(JSON.stringify({
   ok: true,
   screenshot: screenshotPath,
-  checked: ["three existing tabs", "Card Set creation", "Axie Slot creation", "set/slot assignment", "All Cards 192 / 192", "visible and clickable Furball search result", "first and last result list reachability", "Furball V1→V2 migration notice", "Gameplay effect editor", "Reload Layout", "Damage amount 20", "Hits 2→3", "Save & Next", "false Clean disabled", "original placeholder mode", "Export Game Card through UI", "byte-identical placeholder hash", "Export Game Set through UI", "portable manifest and SHA-256"],
+  checked: ["three existing tabs", "Card Set creation", "Rename/Delete dialog interaction recovery", "Axie Slot creation", "set/slot assignment", "All Cards 192 / 192", "visible and clickable Furball search result", "first and last result list reachability", "Furball V1→V2 migration notice", "Gameplay effect editor", "Reload Layout", "Damage amount 20", "Hits 2→3", "Save & Next", "false Clean disabled", "original placeholder mode", "Export Game Card through UI", "byte-identical placeholder hash", "Export Game Set through UI", "portable manifest and SHA-256"],
   original_preview_sha256: report.originalPreviewHash,
   card_set: setPath,
   game_set_manifest: setManifestPath,

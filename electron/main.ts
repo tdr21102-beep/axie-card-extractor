@@ -13,7 +13,7 @@ function installSmokeCheck(window: BrowserWindow): void {
   window.webContents.once("did-finish-load", () => {
     void (async () => {
       await writeFile(`${screenshotPath}.stage`, "loaded\n", "utf8");
-      let result: { ok: boolean; text: string; error?: string; originalPreviewHash?: string; amount?: string; initialHits?: string; editedHits?: string; setId?: string; slotId?: string; saveAndNext?: boolean; gameSetExported?: boolean; browserScrolled?: boolean; browserControlsVisible?: boolean; allCardsCountVerified?: boolean; searchResultVisible?: boolean; searchResultClickable?: boolean; listFirstReachable?: boolean; listLastReachable?: boolean; cardListScrolled?: boolean; layoutReloaded?: boolean };
+      let result: { ok: boolean; text: string; error?: string; originalPreviewHash?: string; amount?: string; initialHits?: string; editedHits?: string; setId?: string; slotId?: string; saveAndNext?: boolean; gameSetExported?: boolean; browserScrolled?: boolean; browserControlsVisible?: boolean; allCardsCountVerified?: boolean; searchResultVisible?: boolean; searchResultClickable?: boolean; listFirstReachable?: boolean; listLastReachable?: boolean; cardListScrolled?: boolean; layoutReloaded?: boolean; dialogInteractionRecovered?: boolean };
       try {
         result = await window.webContents.executeJavaScript(`new Promise((resolve) => {
           const deadline = Date.now() + 60000;
@@ -30,6 +30,8 @@ function installSmokeCheck(window: BrowserWindow): void {
           let searchResultClickable = false;
           let listFirstReachable = false;
           let listLastReachable = false;
+          let dialogInteractionRecovered = false;
+          let interactionDiagnostic = "";
           window.confirm = () => true;
           const field = (scope, label) => Array.from(scope.querySelectorAll("label.field"))
             .find((item) => item.querySelector("span")?.textContent?.trim() === label)
@@ -77,6 +79,32 @@ function installSmokeCheck(window: BrowserWindow): void {
             current.querySelector("button[type=submit]")?.click();
             return true;
           };
+          const beginWorkspaceInteraction = () => {
+            const searchInput = field(document, "Search");
+            const view = field(document, "View");
+            const classFilter = field(document, "Class");
+            if (!(searchInput instanceof HTMLInputElement) || !(view instanceof HTMLSelectElement) || !(classFilter instanceof HTMLSelectElement)) { interactionDiagnostic = "required controls missing"; return false; }
+            if (searchInput.disabled || view.disabled || classFilter.disabled || document.querySelector(".production-dialog-backdrop")) { interactionDiagnostic = "disabled=" + searchInput.disabled + "/" + view.disabled + "/" + classFilter.disabled + ", backdrop=" + Boolean(document.querySelector(".production-dialog-backdrop")); return false; }
+            const canReceivePointer = (element) => {
+              const rect = element.getBoundingClientRect();
+              const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+              return Boolean(target && (target === element || element.contains(target)));
+            };
+            if (!canReceivePointer(searchInput) || !canReceivePointer(view) || !canReceivePointer(classFilter)) { interactionDiagnostic = "pointer=" + canReceivePointer(searchInput) + "/" + canReceivePointer(view) + "/" + canReceivePointer(classFilter); return false; }
+            searchInput.focus();
+            if (document.activeElement !== searchInput) { interactionDiagnostic = "search input did not receive focus"; return false; }
+            setReactValue(searchInput, "Furball");
+            setReactValue(classFilter, "Beast");
+            return true;
+          };
+          const completeWorkspaceInteraction = () => {
+            const searchInput = field(document, "Search");
+            const classFilter = field(document, "Class");
+            const changed = searchInput?.value === "Furball" && classFilter?.value === "Beast";
+            interactionDiagnostic = "changed=" + changed + ", search=" + searchInput?.value + ", class=" + classFilter?.value;
+            document.querySelector(".clear-production-filters")?.click();
+            return changed;
+          };
           const inspect = () => {
             try {
             const buttons = Array.from(document.querySelectorAll("nav button"));
@@ -92,6 +120,71 @@ function installSmokeCheck(window: BrowserWindow): void {
             } else if (stage === 1 && submitDialog("Create Card Set", "First Battle Set")) {
               stage = 1.5;
             } else if (stage === 1.5 && text.includes("Card Set “First Battle Set” created")) {
+              button("Rename")?.click();
+              stage = 1.6;
+            } else if (stage === 1.6 && submitDialog("Rename Card Set", "First Battle Set Verified")) {
+              stage = 1.7;
+            } else if (stage === 1.7 && text.includes("Card Set renamed to “First Battle Set Verified”")) {
+              if (!beginWorkspaceInteraction()) {
+                resolve({ ok: false, text, setId, error: "Workspace controls did not recover after confirming Rename Card Set: " + interactionDiagnostic });
+                return;
+              }
+              stage = 1.71;
+            } else if (stage === 1.71) {
+              if (!completeWorkspaceInteraction()) {
+                resolve({ ok: false, text, setId, error: "Search/Class did not accept interaction after confirming Rename Card Set: " + interactionDiagnostic });
+                return;
+              }
+              button("Rename")?.click();
+              stage = 1.8;
+            } else if (stage === 1.8 && dialog("Rename Card Set")) {
+              dialog("Rename Card Set")?.querySelector("button[type=button]")?.click();
+              stage = 1.9;
+            } else if (stage === 1.9 && !dialog("Rename Card Set")) {
+              if (!beginWorkspaceInteraction()) {
+                resolve({ ok: false, text, setId, error: "Workspace controls did not recover after cancelling Rename Card Set." });
+                return;
+              }
+              stage = 1.91;
+            } else if (stage === 1.91) {
+              if (!completeWorkspaceInteraction()) {
+                resolve({ ok: false, text, setId, error: "Search/Class did not accept interaction after cancelling Rename Card Set: " + interactionDiagnostic });
+                return;
+              }
+              button("+ Create")?.click();
+              stage = 1.95;
+            } else if (stage === 1.95 && submitDialog("Create Card Set", "Disposable Smoke Set")) {
+              stage = 1.96;
+            } else if (stage === 1.96 && text.includes("Card Set “Disposable Smoke Set” created")) {
+              window.confirm = () => false;
+              button("Delete")?.click();
+              stage = 1.97;
+            } else if (stage === 1.97) {
+              if (!beginWorkspaceInteraction() || field(document, "Current Set")?.value !== "disposable_smoke_set") {
+                resolve({ ok: false, text, setId, error: "Workspace controls did not remain interactive after cancelling Delete Card Set." });
+                return;
+              }
+              stage = 1.971;
+            } else if (stage === 1.971) {
+              if (!completeWorkspaceInteraction()) {
+                resolve({ ok: false, text, setId, error: "Search/Class did not accept interaction after cancelling Delete Card Set: " + interactionDiagnostic });
+                return;
+              }
+              window.confirm = () => true;
+              button("Delete")?.click();
+              stage = 1.98;
+            } else if (stage === 1.98 && text.includes("Card Set deleted")) {
+              if (!beginWorkspaceInteraction() || document.querySelector(".production-dialog-backdrop")) {
+                resolve({ ok: false, text, setId, error: "Workspace controls did not recover after confirming Delete Card Set." });
+                return;
+              }
+              stage = 1.981;
+            } else if (stage === 1.981) {
+              if (!completeWorkspaceInteraction()) {
+                resolve({ ok: false, text, setId, error: "Search/Class did not accept interaction after confirming Delete Card Set: " + interactionDiagnostic });
+                return;
+              }
+              dialogInteractionRecovered = true;
               setId = field(document, "Current Set")?.value ?? null;
               const browser = document.querySelector(".studio-browser");
               if (browser) { browser.scrollTop = browser.scrollHeight; }
@@ -223,7 +316,7 @@ function installSmokeCheck(window: BrowserWindow): void {
               const lastCard = Array.from(document.querySelectorAll(".studio-card-list .card-row")).at(-1);
               listLastReachable = Boolean(browser && lastCard && browser.scrollHeight > browser.clientHeight && browser.scrollTop > 0 && visible(lastCard, browser));
               const cardListScrolled = listFirstReachable && listLastReachable;
-              resolve({ ok: true, text, originalPreviewHash, amount: field(finalEffect, "Amount")?.value, initialHits, editedHits: field(finalEffect, "Hits")?.value, setId, slotId, saveAndNext: true, gameSetExported: true, browserScrolled, browserControlsVisible, allCardsCountVerified, searchResultVisible, searchResultClickable, listFirstReachable, listLastReachable, cardListScrolled, layoutReloaded });
+              resolve({ ok: true, text, originalPreviewHash, amount: field(finalEffect, "Amount")?.value, initialHits, editedHits: field(finalEffect, "Hits")?.value, setId, slotId, saveAndNext: true, gameSetExported: true, browserScrolled, browserControlsVisible, allCardsCountVerified, searchResultVisible, searchResultClickable, listFirstReachable, listLastReachable, cardListScrolled, layoutReloaded, dialogInteractionRecovered });
               return;
             } else if (Date.now() >= deadline) {
               resolve({ ok: false, text, originalPreviewHash, initialHits, setId, slotId, error: "Card Studio V3 GUI production flow did not finish before timeout (stage " + stage + ")" });
