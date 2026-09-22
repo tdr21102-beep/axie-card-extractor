@@ -1,5 +1,6 @@
 import type { CardGameMetadata } from "./game-metadata.ts";
 import type { GameVisualSource } from "./game-card-exporter.ts";
+import type { CardVisualLayoutOverrides } from "./card-layout-overrides.ts";
 
 export const CARD_SET_SCHEMA_VERSION = 1 as const;
 export const STUDIO_DRAFT_SCHEMA_VERSION = 1 as const;
@@ -25,6 +26,8 @@ export interface StudioDraftDocument {
   schema_version: typeof STUDIO_DRAFT_SCHEMA_VERSION;
   card_id: string;
   metadata: unknown;
+  /** Optional visual-only authoring state; gameplay metadata remains untouched. */
+  visual_layout?: CardVisualLayoutOverrides;
 }
 
 export interface StudioDraftResult {
@@ -104,6 +107,7 @@ export interface AxieSlotCardRequest extends AxieSlotRequest {
 export interface StudioDraftSaveRequest {
   cardId: string;
   metadata: unknown;
+  visualLayoutOverrides?: CardVisualLayoutOverrides;
 }
 
 export interface ProductionDashboardRequest {

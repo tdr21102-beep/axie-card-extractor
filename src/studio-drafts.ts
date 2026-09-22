@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { CatalogCard } from "./catalog.ts";
 import { defaultGameMetadata } from "./card-studio.ts";
+import { parseCardVisualLayoutOverrides, type CardVisualLayoutOverrides } from "./card-layout-overrides.ts";
 import {
   STUDIO_DRAFT_SCHEMA_VERSION,
   type StudioDraftDocument,
@@ -61,17 +62,19 @@ function validateStoredDraft(value: unknown, card: CatalogCard): StudioDraftDocu
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Studio draft must be an object");
   const input = value as Record<string, unknown>;
   const keys = Object.keys(input);
-  if (keys.some((key) => !new Set(["schema_version", "card_id", "metadata"]).has(key))) {
+  if (keys.some((key) => !new Set(["schema_version", "card_id", "metadata", "visual_layout"]).has(key))) {
     throw new Error("Studio draft contains unexpected fields");
   }
   if (input.schema_version !== STUDIO_DRAFT_SCHEMA_VERSION) throw new Error(`Studio draft schema_version must equal ${STUDIO_DRAFT_SCHEMA_VERSION}`);
   if (input.card_id !== card.id) throw new Error("Studio draft card identity does not match the source card");
   validateDraftIdentity(card, input.metadata);
   assertJsonValue(input.metadata, "$.metadata", new Set());
+  const visualLayout = input.visual_layout === undefined ? undefined : parseCardVisualLayoutOverrides(input.visual_layout);
   return {
     schema_version: STUDIO_DRAFT_SCHEMA_VERSION,
     card_id: card.id,
-    metadata: structuredClone(input.metadata)
+    metadata: structuredClone(input.metadata),
+    ...(visualLayout === undefined ? {} : { visual_layout: visualLayout })
   };
 }
 
@@ -124,12 +127,18 @@ export async function loadStudioDraft(card: CatalogCard, root = "."): Promise<St
   }
 }
 
-export async function saveStudioDraft(card: CatalogCard, metadata: unknown, root = "."): Promise<StudioDraftResult> {
+export async function saveStudioDraft(
+  card: CatalogCard,
+  metadata: unknown,
+  root = ".",
+  visualLayoutOverrides?: CardVisualLayoutOverrides
+): Promise<StudioDraftResult> {
   validateDraftIdentity(card, metadata);
   const draft: StudioDraftDocument = {
     schema_version: STUDIO_DRAFT_SCHEMA_VERSION,
     card_id: card.id,
-    metadata: structuredClone(metadata)
+    metadata: structuredClone(metadata),
+    ...(visualLayoutOverrides === undefined ? {} : { visual_layout: parseCardVisualLayoutOverrides(visualLayoutOverrides) })
   };
   await atomicWrite(studioDraftPath(card, root), serializeDraft(draft));
   return { available: true, draft: validateStoredDraft(draft, card) };

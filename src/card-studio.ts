@@ -6,6 +6,11 @@ import type { CatalogCard } from "./catalog.ts";
 import { sha256 } from "./downloader.ts";
 import { classDirectory, snakeCase } from "./naming.ts";
 import { GAME_METADATA_SCHEMA_VERSION, parseGameMetadata, type CardGameMetadata } from "./game-metadata.ts";
+import {
+  EMPTY_CARD_VISUAL_LAYOUT_OVERRIDES,
+  parseCardVisualLayoutOverrides,
+  type CardVisualLayoutOverrides
+} from "./card-layout-overrides.ts";
 export type { CardGameMetadata } from "./game-metadata.ts";
 
 export interface CleanAssetState {
@@ -20,6 +25,7 @@ export interface CleanAssetState {
 export interface CardStudioPaths {
   clean: string;
   data: string;
+  visualLayout: string;
   rendered: string;
 }
 
@@ -122,6 +128,7 @@ export function cardStudioPaths(card: CatalogCard, root = "."): CardStudioPaths 
   return {
     clean: resolve(base, "clean", identity.class, `${identity.id}.png`),
     data: resolve(base, "data", identity.class, `${identity.id}.json`),
+    visualLayout: resolve(base, "layouts", identity.class, `${identity.id}.json`),
     rendered: resolve(base, "rendered", identity.class, `${identity.id}.png`)
   };
 }
@@ -165,6 +172,40 @@ export async function saveGameMetadata(
   const validated = validateGameMetadata(metadata);
   assertMetadataIdentity(validated, card);
   await atomicWrite(cardStudioPaths(card, root).data, `${JSON.stringify(validated, null, 2)}\n`);
+  return validated;
+}
+
+/**
+ * Visual layout authoring is intentionally stored beside, not inside, game
+ * metadata. A missing document means the card inherits the global layout.
+ */
+export async function loadCardVisualLayoutOverrides(
+  card: CatalogCard,
+  root = "."
+): Promise<CardVisualLayoutOverrides> {
+  try {
+    return parseCardVisualLayoutOverrides(JSON.parse(await readFile(cardStudioPaths(card, root).visualLayout, "utf8")) as unknown);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return structuredClone(EMPTY_CARD_VISUAL_LAYOUT_OVERRIDES);
+    throw error;
+  }
+}
+
+export async function saveCardVisualLayoutOverrides(
+  card: CatalogCard,
+  overrides: unknown,
+  root = "."
+): Promise<CardVisualLayoutOverrides> {
+  const validated = parseCardVisualLayoutOverrides(overrides);
+  const path = cardStudioPaths(card, root).visualLayout;
+  if (Object.keys(validated.fields).length === 0) {
+    await rm(path, { force: true });
+  } else {
+    await atomicWrite(path, `${JSON.stringify(validated, null, 2)}\n`);
+  }
+  // A layout edit only invalidates the card's derived render. It never writes
+  // the RAW asset, Clean Base, or gameplay metadata.
+  await rm(cardStudioPaths(card, root).rendered, { force: true });
   return validated;
 }
 

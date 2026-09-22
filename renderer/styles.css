@@ -154,6 +154,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--aqua); box-shado
 .identity-note code { color: #b7c5d4; overflow: hidden; text-overflow: ellipsis; }
 .identity-note span { white-space: nowrap; text-transform: lowercase; }
 .number-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.visual-layout-editor { background: rgba(44, 171, 173, .05); }
+.visual-layout-editor .field small { color: var(--muted); font-size: 8px; font-weight: 500; }
+.visual-layout-help { margin: -2px 0 11px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.visual-layout-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.visual-layout-actions button { min-width: 0; padding: 8px 4px; font-size: 9px; }
 .gameplay-metadata { background: rgba(9,15,23,.34); }
 .schema-note { display: flex; align-items: center; justify-content: space-between; margin: -2px 0 13px; padding: 7px 9px; border-radius: 6px; background: #0c141d; color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .07em; }
 .schema-note code { color: var(--aqua); font-size: 10px; text-transform: none; }

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { createCanvas, loadImage } from "@napi-rs/canvas";
-import { defaultGameMetadata } from "../src/card-studio.ts";
+import { cardStudioPaths, defaultGameMetadata } from "../src/card-studio.ts";
+import { EMPTY_CARD_VISUAL_LAYOUT_OVERRIDES } from "../src/card-layout-overrides.ts";
 import { toCatalogCard } from "../src/catalog.ts";
 import { sha256 } from "../src/downloader.ts";
 import { createCardStudioService } from "../src/studio-service.ts";
@@ -133,5 +134,46 @@ test("studio service reloads layout from disk and retains the last valid layout 
   assert.equal(retained.sha256, after.sha256);
   assert.deepEqual(new Uint8Array(await readFile(imported.clean.path)), clean);
   assert.deepEqual(metadata, { ...defaultGameMetadata(source), name: "Reloaded Layout", value: 30 });
+  await rm(root, { recursive: true, force: true });
+});
+
+test("studio service persists sparse visual layout overrides, renders effective layout, and inherits reloads", async () => {
+  const root = await mkdtemp(join(tmpdir(), "axie-studio-visual-layout-"));
+  const layoutPath = join(root, "card_layout.json");
+  const layout = JSON.parse(await readFile(resolve("config/card_layout.json"), "utf8")) as { name: { x: number; y: number } };
+  await writeFile(layoutPath, JSON.stringify(layout));
+  const source = {
+    ...toCatalogCard(card({ title: "Furball", slug: "furball", class: { _id: "beast", title: "Beast" }, part: { _id: "back", title: "Back" } })),
+    image_size: null,
+    image_sha1: null
+  };
+  const clean = cleanFixture();
+  const cleanPath = join(root, "furball-clean.png");
+  await writeFile(cleanPath, clean);
+  const service = createCardStudioService({ root, layoutPath });
+  await service.importClean(source, cleanPath);
+  const metadata = { ...defaultGameMetadata(source), name: "Override Name", value: 30 };
+  const baseline = await service.render(source, metadata);
+  const overrides = { schema_version: 1 as const, fields: { name: { x: layout.name.x - 11 } } };
+  const saved = await service.saveMetadata(source, metadata, overrides);
+  assert.equal(saved.effectiveVisualLayout.name.x, layout.name.x - 11);
+  assert.equal(saved.effectiveVisualLayout.name.y, layout.name.y);
+  assert.equal(saved.effectiveVisualLayout.name.inherited_y, true);
+  assert.deepEqual(JSON.parse(await readFile(cardStudioPaths(source, root).visualLayout, "utf8")), overrides);
+  const renderedOverride = await service.render(source, metadata);
+  assert.notEqual(renderedOverride.sha256, baseline.sha256);
+  assert.deepEqual(new Uint8Array(await readFile(cardStudioPaths(source, root).clean)), clean, "Clean Base must remain byte-identical");
+
+  layout.name.y += 19;
+  await writeFile(layoutPath, JSON.stringify(layout));
+  service.reloadLayout();
+  const reloaded = await service.load(source);
+  assert.equal(reloaded.effectiveVisualLayout.name.x, overrides.fields.name.x, "overridden x stays per-card");
+  assert.equal(reloaded.effectiveVisualLayout.name.y, layout.name.y, "inherited y follows reloaded global layout");
+
+  const reset = await service.saveMetadata(source, metadata, EMPTY_CARD_VISUAL_LAYOUT_OVERRIDES);
+  assert.equal(reset.effectiveVisualLayout.name.x, layout.name.x);
+  await assert.rejects(readFile(cardStudioPaths(source, root).visualLayout), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+  assert.deepEqual(new Uint8Array(await readFile(cardStudioPaths(source, root).clean)), clean, "reset must not modify Clean Base");
   await rm(root, { recursive: true, force: true });
 });

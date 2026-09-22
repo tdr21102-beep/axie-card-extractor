@@ -20,6 +20,10 @@ test("IPC validation accepts supported values", () => {
   const migrated = validateStudioMetadataRequest({ cardId: "source-id", metadata: studioMetadata }).metadata;
   assert.equal(migrated.schema_version, 2);
   assert.deepEqual(migrated.effects, []);
+  assert.deepEqual(
+    validateStudioMetadataRequest({ cardId: "source-id", metadata: migrated, visualLayoutOverrides: { schema_version: 1, fields: { name: { x: 501 } } } }).visualLayoutOverrides,
+    { schema_version: 1, fields: { name: { x: 501 } } }
+  );
   assert.equal(validateStudioGameExportRequest({ cardId: "source-id", metadata: migrated, visualSource: "original" }).visualSource, "original");
   assert.equal(validateCardSetId("first_battle_set"), "first_battle_set");
   assert.deepEqual(validateCardSetNameRequest({ name: " First Battle Set " }), { name: "First Battle Set" });
@@ -40,6 +44,7 @@ test("IPC validation rejects unsupported filters and layouts", () => {
   assert.throws(() => validateBatchRequest({ filters: {}, layout: "elsewhere", exportMetadata: true }), /Invalid output layout/);
   assert.throws(() => validateStudioMetadataRequest({ cardId: "", metadata: studioMetadata }), /Invalid card id/);
   assert.throws(() => validateStudioMetadataRequest({ cardId: "source-id", metadata: { ...studioMetadata, cost: -1 } }), /cost/i);
+  assert.throws(() => validateStudioMetadataRequest({ cardId: "source-id", metadata: studioMetadata, visualLayoutOverrides: { schema_version: 1, fields: { name: { width: 2 } } } }), /x and y|only supports/i);
   assert.throws(() => validateStudioGameExportRequest({ cardId: "source-id", metadata: studioMetadata, visualSource: "raw" }), /visual source/i);
   assert.throws(() => validateCardSetNameRequest({ name: "  " }), /card set name/i);
   assert.throws(() => validateCardSetRenameRequest({ setId: "../escape", name: "Set" }), /card set id/i);

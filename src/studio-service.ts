@@ -10,10 +10,17 @@ import {
   cardStudioPaths,
   getCleanAssetState,
   importCleanBase,
+  loadCardVisualLayoutOverrides,
   loadGameMetadata,
+  saveCardVisualLayoutOverrides,
   saveGameMetadata,
   type CardGameMetadata
 } from "./card-studio.ts";
+import {
+  applyCardVisualLayoutOverrides,
+  effectiveVisualLayout,
+  type CardVisualLayoutOverrides
+} from "./card-layout-overrides.ts";
 import { assertGameMetadataGameReady, parseGameMetadata } from "./game-metadata.ts";
 import { loadCardLayout } from "./card-layout.ts";
 import { renderCard } from "./card-renderer.ts";
@@ -53,9 +60,10 @@ export function createCardStudioService(options: CardStudioServiceOptions) {
   };
 
   const load = async (card: CatalogCard) => {
-    const [stored, clean] = await Promise.all([
+    const [stored, clean, visualLayoutOverrides] = await Promise.all([
       loadGameMetadata(card, options.root),
-      getCleanAssetState(card, options.root)
+      getCleanAssetState(card, options.root),
+      loadCardVisualLayoutOverrides(card, options.root)
     ]);
     return {
       source: card,
@@ -63,12 +71,15 @@ export function createCardStudioService(options: CardStudioServiceOptions) {
       metadataStatus: stored.status,
       metadataSourceSchemaVersion: stored.sourceSchemaVersion,
       metadataMigrated: stored.migrated,
-      clean
+      clean,
+      visualLayoutOverrides,
+      effectiveVisualLayout: effectiveVisualLayout(layout, visualLayoutOverrides)
     };
   };
 
-  const saveMetadata = async (card: CatalogCard, metadata: CardGameMetadata) => {
+  const saveMetadata = async (card: CatalogCard, metadata: CardGameMetadata, visualLayoutOverrides?: CardVisualLayoutOverrides) => {
     await saveGameMetadata(card, metadata, options.root);
+    if (visualLayoutOverrides !== undefined) await saveCardVisualLayoutOverrides(card, visualLayoutOverrides, options.root);
     return load(card);
   };
 
@@ -94,18 +105,20 @@ export function createCardStudioService(options: CardStudioServiceOptions) {
     return load(card);
   };
 
-  const render = async (card: CatalogCard, metadata: CardGameMetadata) => {
+  const render = async (card: CatalogCard, metadata: CardGameMetadata, visualLayoutOverrides?: CardVisualLayoutOverrides) => {
     const validated = parseGameMetadata(metadata);
     assertMetadataIdentity(validated, card);
     const clean = await getCleanAssetState(card, options.root);
     if (!clean.available || !clean.sha256) throw new Error("Clean visual not available");
     const cleanBytes = new Uint8Array(await readFile(clean.path));
-    const result = await renderCard(cleanBytes, validated, layout);
-    return { ...result, cleanSha256: clean.sha256 };
+    const overrides = visualLayoutOverrides ?? await loadCardVisualLayoutOverrides(card, options.root);
+    const resolvedLayout = applyCardVisualLayoutOverrides(layout, overrides);
+    const result = await renderCard(cleanBytes, validated, resolvedLayout);
+    return { ...result, cleanSha256: clean.sha256, effectiveVisualLayout: effectiveVisualLayout(layout, overrides) };
   };
 
-  const exportRendered = async (card: CatalogCard, metadata: CardGameMetadata) => {
-    const rendered = await render(card, metadata);
+  const exportRendered = async (card: CatalogCard, metadata: CardGameMetadata, visualLayoutOverrides?: CardVisualLayoutOverrides) => {
+    const rendered = await render(card, metadata, visualLayoutOverrides);
     const path = cardStudioPaths(card, options.root).rendered;
     await atomicReplace(path, rendered.bytes);
     return { path, sha256: rendered.sha256, cleanSha256: rendered.cleanSha256, warnings: rendered.warnings };
@@ -114,6 +127,7 @@ export function createCardStudioService(options: CardStudioServiceOptions) {
   const exportGameCardWith = async (
     card: CatalogCard,
     metadata: CardGameMetadata,
+    visualLayoutOverrides: CardVisualLayoutOverrides | undefined,
     visualSource: GameVisualSource,
     exportRoot: string,
     write: typeof exportGameCardPackage
@@ -131,18 +145,18 @@ export function createCardStudioService(options: CardStudioServiceOptions) {
         fetchImpl: options.fetchImpl
       })).bytes;
     } else if (visualSource === "rendered") {
-      imageBytes = (await render(card, validated)).bytes;
+      imageBytes = (await render(card, validated, visualLayoutOverrides)).bytes;
     } else {
       throw new Error("Invalid game visual source");
     }
     return write({ card, metadata: validated, visualSource, imageBytes, exportRoot });
   };
 
-  const exportGameCard = (card: CatalogCard, metadata: CardGameMetadata, visualSource: GameVisualSource, exportRoot: string) =>
-    exportGameCardWith(card, metadata, visualSource, exportRoot, exportGameCardPackage);
+  const exportGameCard = (card: CatalogCard, metadata: CardGameMetadata, visualSource: GameVisualSource, exportRoot: string, visualLayoutOverrides?: CardVisualLayoutOverrides) =>
+    exportGameCardWith(card, metadata, visualLayoutOverrides, visualSource, exportRoot, exportGameCardPackage);
 
-  const exportIndividualGameCardFlat = (card: CatalogCard, metadata: CardGameMetadata, visualSource: GameVisualSource, exportRoot: string) =>
-    exportGameCardWith(card, metadata, visualSource, exportRoot, exportIndividualGameCard);
+  const exportIndividualGameCardFlat = (card: CatalogCard, metadata: CardGameMetadata, visualSource: GameVisualSource, exportRoot: string, visualLayoutOverrides?: CardVisualLayoutOverrides) =>
+    exportGameCardWith(card, metadata, visualLayoutOverrides, visualSource, exportRoot, exportIndividualGameCard);
 
   return {
     load,

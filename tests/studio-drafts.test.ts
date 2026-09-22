@@ -44,6 +44,17 @@ test("discard removes only the draft and leaves confirmed metadata untouched", a
   assert.equal(await readFile(cardStudioPaths(catalogCard, root).data, "utf8"), before);
 });
 
+test("draft recovery keeps visual layout authoring separate from gameplay metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "axie-draft-visual-layout-"));
+  const catalogCard = source();
+  const metadata = defaultGameMetadata(catalogCard);
+  const visualLayoutOverrides = { schema_version: 1 as const, fields: { name: { x: 501 } } };
+  const saved = await saveStudioDraft(catalogCard, metadata, root, visualLayoutOverrides);
+  assert.deepEqual(saved.draft?.metadata, metadata);
+  assert.deepEqual(saved.draft?.visual_layout, visualLayoutOverrides);
+  assert.deepEqual((await loadStudioDraft(catalogCard, root)).draft?.visual_layout, visualLayoutOverrides);
+});
+
 test("drafts enforce source identity, JSON serialization and a size bound", async () => {
   const root = await mkdtemp(join(tmpdir(), "axie-draft-validation-"));
   const catalogCard = source();

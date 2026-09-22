@@ -24,6 +24,12 @@ import {
   validateGameMetadataDocument
 } from "../src/game-metadata.ts";
 import type { BatchPlan, PreviewPayload, StudioCardPayload, StudioPreviewPayload } from "../src/ipc-contract.ts";
+import {
+  CARD_VISUAL_LAYOUT_FIELDS,
+  resetVisualLayoutElement,
+  updateVisualLayoutCoordinate,
+  type CardVisualLayoutField
+} from "../src/card-layout-overrides.ts";
 import type {
   CardSetDocument,
   GameSetExportResult,
@@ -250,6 +256,7 @@ function BatchTab({ cards, exportRoot, onChooseFolder }: {
 }
 
 type StudioMetadata = StudioCardPayload["metadata"];
+type StudioVisualLayoutOverrides = StudioCardPayload["visualLayoutOverrides"];
 type StudioEffect = StudioMetadata["effects"][number];
 type EffectType = StudioEffect["type"];
 type TargetMode = StudioMetadata["targeting"]["mode"];
@@ -257,6 +264,15 @@ type VisualSource = "original" | "rendered";
 
 function cloneStudioMetadata(metadata: StudioMetadata): StudioMetadata {
   return structuredClone(metadata);
+}
+
+interface StudioEditorState {
+  metadata: StudioMetadata;
+  visualLayoutOverrides: StudioVisualLayoutOverrides;
+}
+
+function cloneStudioEditorState(state: StudioEditorState): StudioEditorState {
+  return structuredClone(state);
 }
 
 function replacementEffect(type: EffectType, id: string, target: TargetMode): StudioEffect {
@@ -322,8 +338,9 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
   const [setExportVisualSource, setSetExportVisualSource] = useState<VisualSource>("original");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [studioCard, setStudioCard] = useState<StudioCardPayload | null>(null);
-  const [editHistory, setEditHistory] = useState<EditorHistory<StudioMetadata> | null>(null);
-  const [saved, setSaved] = useState<StudioMetadata | null>(null);
+  const [editHistory, setEditHistory] = useState<EditorHistory<StudioEditorState> | null>(null);
+  const [saved, setSaved] = useState<StudioEditorState | null>(null);
+  const [selectedVisualLayoutField, setSelectedVisualLayoutField] = useState<CardVisualLayoutField>("name");
   const [preview, setPreview] = useState<StudioPreviewPayload | null>(null);
   const [originalPreview, setOriginalPreview] = useState<PreviewPayload | null>(null);
   const [visualSource, setVisualSource] = useState<VisualSource>("original");
@@ -347,7 +364,9 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
   const draftEpochRef = useRef(0);
   const draftWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
 
-  const draft = editHistory?.present ?? null;
+  const editorState = editHistory?.present ?? null;
+  const draft = editorState?.metadata ?? null;
+  const visualLayoutOverrides = editorState?.visualLayoutOverrides ?? null;
   const undoStack = editHistory?.past ?? [];
   const redoStack = editHistory?.future ?? [];
 
@@ -367,14 +386,18 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     gameReady: gameReadyFilter
   }), [cards, classFilter, currentSet, currentSlot, gameReadyFilter, hasCleanFilter, hasEffectsFilter, partFilter, productionByCard, scope, search, statusFilter]);
   const hasUnsavedChanges = useMemo(
-    () => Boolean(draft && saved && (JSON.stringify(draft) !== JSON.stringify(saved) || advancedText !== JSON.stringify(draft, null, 2))),
-    [advancedText, draft, saved]
+    () => Boolean(editorState && saved && (JSON.stringify(editorState) !== JSON.stringify(saved) || advancedText !== JSON.stringify(draft, null, 2))),
+    [advancedText, draft, editorState, saved]
   );
   const validation = useMemo(() => draft ? validateGameMetadataDocument(draft) : null, [draft]);
   const previewBusy = visualSource === "original" ? originalBusy : renderBusy;
   const shownPreview = visualSource === "original" ? originalPreview?.dataUrl : preview?.dataUrl;
   const shownPreviewHash = visualSource === "original" ? originalPreview?.sha256 : preview?.sha256;
   const selectedProduction = selectedId ? productionByCard.get(selectedId) ?? null : null;
+  const selectedVisualLayout = studioCard?.effectiveVisualLayout[selectedVisualLayoutField] ?? null;
+  const selectedVisualLayoutOverride = visualLayoutOverrides?.fields[selectedVisualLayoutField] ?? null;
+  const displayedVisualLayoutX = selectedVisualLayoutOverride?.x ?? selectedVisualLayout?.x ?? 0;
+  const displayedVisualLayoutY = selectedVisualLayoutOverride?.y ?? selectedVisualLayout?.y ?? 0;
   const validationErrors = validation?.issues.filter((issue) => issue.severity === "error") ?? [];
   const validationWarnings = validation?.issues.filter((issue) => issue.severity === "warning") ?? [];
   const editorLockedByRecovery = recoveryDraft !== null;
@@ -478,8 +501,9 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
       .then(([payload, recovery]) => {
         if (!active) return;
         setStudioCard(payload);
-        setEditHistory(createEditorHistory(payload.metadata));
-        setSaved(cloneStudioMetadata(payload.metadata));
+        const initialState: StudioEditorState = { metadata: payload.metadata, visualLayoutOverrides: payload.visualLayoutOverrides };
+        setEditHistory(createEditorHistory(initialState));
+        setSaved(cloneStudioEditorState(initialState));
         setAdvancedText(JSON.stringify(payload.metadata, null, 2));
         setVisualSource(payload.clean.available ? "rendered" : "original");
         setRecoveryDraft(recovery.available ? recovery.draft : null);
@@ -495,17 +519,18 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
   }, [selectedId]);
 
   useEffect(() => {
-    if (!selectedId || !draft || !saved || !draftTouched || recoveryDraft) return;
-    const changed = JSON.stringify(draft) !== JSON.stringify(saved);
+    if (!selectedId || !draft || !saved || !visualLayoutOverrides || !draftTouched || recoveryDraft) return;
+    const changed = JSON.stringify(editorState) !== JSON.stringify(saved);
     const cardId = selectedId;
     const draftEpoch = draftEpochRef.current;
     const metadata = cloneStudioMetadata(draft);
+    const layoutOverrides = structuredClone(visualLayoutOverrides);
     const timer = window.setTimeout(() => {
       if (selectedIdRef.current !== cardId || draftEpochRef.current !== draftEpoch) return;
       setDraftStatus("saving");
       queueDraftWrite(async () => {
         if (selectedIdRef.current !== cardId || draftEpochRef.current !== draftEpoch) return;
-        if (changed) await window.axieCards.saveStudioDraft({ cardId, metadata });
+        if (changed) await window.axieCards.saveStudioDraft({ cardId, metadata, visualLayoutOverrides: layoutOverrides });
         else await window.axieCards.discardStudioDraft(cardId);
       })
         .then(() => {
@@ -520,7 +545,7 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
         });
     }, 850);
     return () => window.clearTimeout(timer);
-  }, [draft, draftTouched, recoveryDraft, saved, selectedId]);
+  }, [draft, draftTouched, editorState, recoveryDraft, saved, selectedId, visualLayoutOverrides]);
 
   useEffect(() => {
     setOriginalPreview(null);
@@ -548,7 +573,7 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
   }, [selectedId, visualSource]);
 
   useEffect(() => {
-    if (visualSource !== "rendered" || !selectedId || !draft || !studioCard?.clean.available) {
+    if (visualSource !== "rendered" || !selectedId || !draft || !visualLayoutOverrides || !studioCard?.clean.available) {
       setPreview(null);
       setRenderBusy(false);
       return;
@@ -561,10 +586,11 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     let active = true;
     const timer = window.setTimeout(() => {
       setRenderBusy(true);
-      window.axieCards.renderStudioPreview({ cardId: selectedId, metadata: draft })
+      window.axieCards.renderStudioPreview({ cardId: selectedId, metadata: draft, visualLayoutOverrides })
         .then((payload) => {
           if (!active) return;
           setPreview(payload);
+          setStudioCard((current) => current ? { ...current, effectiveVisualLayout: payload.effectiveVisualLayout } : current);
           setIsError(false);
         })
         .catch((error) => {
@@ -580,7 +606,7 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [selectedId, draft, studioCard?.clean.available, studioCard?.clean.sha256, validation?.status, visualSource, layoutRevision]);
+  }, [selectedId, draft, visualLayoutOverrides, studioCard?.clean.available, studioCard?.clean.sha256, validation?.status, visualSource, layoutRevision]);
 
   const reloadLayout = async () => {
     setLayoutReloadBusy(true);
@@ -588,6 +614,11 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     setIsError(false);
     try {
       await window.axieCards.reloadStudioLayout();
+      if (selectedId) {
+        // Refresh backend-authoritative inherited coordinates while retaining
+        // the current unsaved sparse patch in editor history.
+        setStudioCard(await window.axieCards.loadStudioCard(selectedId));
+      }
       // Incrementing this revision re-runs the existing backend render path.
       // It does not alter metadata, gameplay, or any asset on disk.
       setLayoutRevision((revision) => revision + 1);
@@ -600,13 +631,13 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     }
   };
 
-  const acceptDraft = (next: StudioMetadata, allowPendingAdvanced = false) => {
+  const acceptEditorState = (next: StudioEditorState, allowPendingAdvanced = false) => {
     if (editorLockedByRecovery) return false;
     const serializedDraft = draft ? JSON.stringify(draft, null, 2) : "";
     if (!allowPendingAdvanced && draft && advancedText !== serializedDraft && !window.confirm("Discard unapplied Advanced JSON and continue with the visual editor change?")) {
       return false;
     }
-    if (editHistory && JSON.stringify(draft) !== JSON.stringify(next)) {
+    if (editHistory && JSON.stringify(editHistory.present) !== JSON.stringify(next)) {
       setEditHistory(pushEditorHistory(editHistory, next));
     } else if (!editHistory) {
       setEditHistory(createEditorHistory(next));
@@ -614,11 +645,21 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     draftEpochRef.current += 1;
     setDraftTouched(true);
     setDraftStatus("idle");
-    setAdvancedText(JSON.stringify(next, null, 2));
+    setAdvancedText(JSON.stringify(next.metadata, null, 2));
     setAdvancedError(null);
     setMessage(null);
     setIsError(false);
     return true;
+  };
+
+  const acceptDraft = (next: StudioMetadata, allowPendingAdvanced = false) => {
+    if (!visualLayoutOverrides) return false;
+    return acceptEditorState({ metadata: next, visualLayoutOverrides }, allowPendingAdvanced);
+  };
+
+  const acceptVisualLayoutOverrides = (next: StudioVisualLayoutOverrides) => {
+    if (!draft) return false;
+    return acceptEditorState({ metadata: draft, visualLayoutOverrides: next });
   };
 
   const restoreHistory = (direction: "undo" | "redo") => {
@@ -629,7 +670,7 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     if (JSON.stringify(nextHistory.present) === JSON.stringify(editHistory.present)) return;
     draftEpochRef.current += 1;
     setEditHistory(nextHistory);
-    setAdvancedText(JSON.stringify(nextHistory.present, null, 2));
+    setAdvancedText(JSON.stringify(nextHistory.present.metadata, null, 2));
     setAdvancedError(null);
     setDraftTouched(true);
     setDraftStatus("idle");
@@ -637,19 +678,32 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
 
   useEffect(() => {
     const keyboardHistory = (event: KeyboardEvent) => {
-      if (editorLockedByRecovery || !(event.ctrlKey || event.metaKey) || event.altKey || isEditableTarget(event.target)) return;
+      if (editorLockedByRecovery || event.altKey || isEditableTarget(event.target)) return;
       const key = event.key.toLowerCase();
-      if (key === "z" && !event.shiftKey && undoStack.length) {
+      if ((event.ctrlKey || event.metaKey) && key === "z" && !event.shiftKey && undoStack.length) {
         event.preventDefault();
         restoreHistory("undo");
-      } else if ((key === "y" || (key === "z" && event.shiftKey)) && redoStack.length) {
+      } else if ((event.ctrlKey || event.metaKey) && (key === "y" || (key === "z" && event.shiftKey)) && redoStack.length) {
         event.preventDefault();
         restoreHistory("redo");
+      } else if (!event.ctrlKey && !event.metaKey && visualLayoutOverrides && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+        const axis = event.key === "ArrowLeft" || event.key === "ArrowRight" ? "x" : "y";
+        const direction = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+        event.preventDefault();
+        const effective = studioCard?.effectiveVisualLayout[selectedVisualLayoutField];
+        if (!effective) return;
+        const current = visualLayoutOverrides.fields[selectedVisualLayoutField]?.[axis] ?? effective[axis];
+        acceptVisualLayoutOverrides(updateVisualLayoutCoordinate(
+          visualLayoutOverrides,
+          selectedVisualLayoutField,
+          axis,
+          current + direction * (event.shiftKey ? 10 : 1)
+        ));
       }
     };
     window.addEventListener("keydown", keyboardHistory);
     return () => window.removeEventListener("keydown", keyboardHistory);
-  }, [advancedText, draft, editorLockedByRecovery, redoStack, undoStack]);
+  }, [advancedText, draft, editorLockedByRecovery, redoStack, undoStack, visualLayoutOverrides, selectedVisualLayoutField, studioCard]);
 
   const updateDraft = <K extends keyof StudioMetadata>(key: K, value: StudioMetadata[K]) => {
     if (draft) acceptDraft({ ...draft, [key]: value });
@@ -699,19 +753,20 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     if (cardId === selectedId) return true;
     if (!skipGuard && hasUnsavedChanges) {
       const pendingAdvancedJson = Boolean(draft && advancedText !== JSON.stringify(draft, null, 2));
-      const acceptedDraftChanged = Boolean(draft && saved && JSON.stringify(draft) !== JSON.stringify(saved));
+      const acceptedDraftChanged = Boolean(editorState && saved && JSON.stringify(editorState) !== JSON.stringify(saved));
       const prompt = pendingAdvancedJson
         ? "Open another card? Accepted editor changes will be kept as a recovery draft, but unapplied Advanced JSON will be discarded."
         : "Keep this card's recovery draft and open another card without saving confirmed metadata?";
       if (!window.confirm(prompt)) return false;
-      if (acceptedDraftChanged && selectedId && draft) {
+      if (acceptedDraftChanged && selectedId && draft && visualLayoutOverrides) {
         const previousCardId = selectedId;
         const metadata = cloneStudioMetadata(draft);
+        const layoutOverrides = structuredClone(visualLayoutOverrides);
         const flushEpoch = ++draftEpochRef.current;
         setActionBusy("draft");
         setDraftStatus("saving");
         try {
-          await queueDraftWrite(() => window.axieCards.saveStudioDraft({ cardId: previousCardId, metadata }).then(() => undefined));
+          await queueDraftWrite(() => window.axieCards.saveStudioDraft({ cardId: previousCardId, metadata, visualLayoutOverrides: layoutOverrides }).then(() => undefined));
           if (selectedIdRef.current !== previousCardId || draftEpochRef.current !== flushEpoch) return false;
           setDraftStatus("saved");
         } catch (error) {
@@ -733,7 +788,7 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
   };
 
   const saveMetadata = async (): Promise<boolean> => {
-    if (!selectedId || !draft) return false;
+    if (!selectedId || !draft || !visualLayoutOverrides) return false;
     if (advancedText !== JSON.stringify(draft, null, 2)) {
       setAdvancedError("Apply or reset the pending Advanced JSON before saving.");
       return false;
@@ -745,7 +800,7 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     try {
     let payload: StudioCardPayload;
     try {
-      payload = await window.axieCards.saveStudioMetadata({ cardId: selectedId, metadata: draft });
+      payload = await window.axieCards.saveStudioMetadata({ cardId: selectedId, metadata: draft, visualLayoutOverrides });
     } catch (error) {
       setMessage(`Metadata could not be saved. Check the fields and try again. ${errorMessage(error)}`);
       setIsError(true);
@@ -754,8 +809,9 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
 
     draftEpochRef.current += 1;
     setStudioCard(payload);
-    setEditHistory(createEditorHistory(payload.metadata));
-    setSaved(cloneStudioMetadata(payload.metadata));
+    const savedState: StudioEditorState = { metadata: payload.metadata, visualLayoutOverrides: payload.visualLayoutOverrides };
+    setEditHistory(createEditorHistory(savedState));
+    setSaved(cloneStudioEditorState(savedState));
     setAdvancedText(JSON.stringify(payload.metadata, null, 2));
     setDraftTouched(false);
     setDraftStatus("idle");
@@ -794,7 +850,7 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     const cardId = selectedId;
     const resetEpoch = ++draftEpochRef.current;
     setEditHistory(createEditorHistory(saved));
-    setAdvancedText(JSON.stringify(saved, null, 2));
+    setAdvancedText(JSON.stringify(saved.metadata, null, 2));
     setAdvancedError(null);
     setDraftTouched(false);
     setDraftStatus("saving");
@@ -813,7 +869,7 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
   };
 
   const restoreRecoveryDraft = () => {
-    if (!recoveryDraft || !selectedId || !draft) return;
+    if (!recoveryDraft || !selectedId || !draft || !visualLayoutOverrides) return;
     if (recoveryDraft.card_id !== selectedId) {
       setMessage("The recovery draft belongs to another source card. Discard it to continue safely.");
       setIsError(true);
@@ -826,7 +882,11 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
       return;
     }
     draftEpochRef.current += 1;
-    setEditHistory(pushEditorHistory(createEditorHistory(draft), restored));
+    const restoredState: StudioEditorState = {
+      metadata: restored,
+      visualLayoutOverrides: recoveryDraft.visual_layout ?? visualLayoutOverrides
+    };
+    setEditHistory(pushEditorHistory(createEditorHistory({ metadata: draft, visualLayoutOverrides }), restoredState));
     setAdvancedText(JSON.stringify(restored, null, 2));
     setAdvancedError(null);
     setRecoveryDraft(null);
@@ -898,10 +958,13 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
         return;
       }
       setStudioCard(payload);
-      setSaved(cloneStudioMetadata(payload.metadata));
-      const nextDraft = currentDraft ?? cloneStudioMetadata(payload.metadata);
-      setEditHistory((current) => current ?? createEditorHistory(nextDraft));
-      if (!hasPendingAdvancedJson) setAdvancedText(JSON.stringify(nextDraft, null, 2));
+      const savedState: StudioEditorState = { metadata: payload.metadata, visualLayoutOverrides: payload.visualLayoutOverrides };
+      setSaved(cloneStudioEditorState(savedState));
+      const nextState: StudioEditorState = currentDraft && visualLayoutOverrides
+        ? { metadata: currentDraft, visualLayoutOverrides }
+        : savedState;
+      setEditHistory((current) => current ?? createEditorHistory(nextState));
+      if (!hasPendingAdvancedJson) setAdvancedText(JSON.stringify(nextState.metadata, null, 2));
       setPreview(null);
       setVisualSource("rendered");
       try {
@@ -920,12 +983,12 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
   };
 
   const exportRendered = async () => {
-    if (!selectedId || !draft || !studioCard?.clean.available) return;
+    if (!selectedId || !draft || !visualLayoutOverrides || !studioCard?.clean.available) return;
     setActionBusy("export");
     setMessage(null);
     setIsError(false);
     try {
-      const payload = await window.axieCards.exportStudioRendered({ cardId: selectedId, metadata: draft });
+      const payload = await window.axieCards.exportStudioRendered({ cardId: selectedId, metadata: draft, visualLayoutOverrides });
       try {
         await refreshDashboard(currentSetId);
         setMessage(`Rendered card exported to ${payload.path}.`);
@@ -942,7 +1005,7 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
   };
 
   const exportGameCard = async () => {
-    if (!selectedId || !draft || validation?.status === "invalid") return;
+    if (!selectedId || !draft || !visualLayoutOverrides || validation?.status === "invalid") return;
     if (advancedText !== JSON.stringify(draft, null, 2)) {
       setAdvancedError("Apply or reset the pending Advanced JSON before exporting.");
       return;
@@ -956,7 +1019,7 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
         setMessage("Game card export cancelled. Choose an export folder when you are ready.");
         return;
       }
-      const payload = await window.axieCards.exportStudioGameCardFlat({ cardId: selectedId, metadata: draft, visualSource });
+      const payload = await window.axieCards.exportStudioGameCardFlat({ cardId: selectedId, metadata: draft, visualSource, visualLayoutOverrides });
       setMessage(payload.status === "skipped" ? `Identical game card files already exist at ${payload.directory}.` : `Game card exported to ${payload.directory}.`);
     } catch (error) {
       setMessage(`Game card package could not be exported. ${errorMessage(error)}`);
@@ -1320,6 +1383,16 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
               </div>
               <label className="field"><span>Card Type</span><input data-validation-path="card_type" disabled={actionBusy !== null} list="studio-card-types" value={draft.card_type} placeholder="attack, skill, secret, power…" onChange={(event) => updateDraft("card_type", event.target.value)} /><datalist id="studio-card-types"><option value="attack" /><option value="skill" /><option value="secret" /><option value="power" /></datalist></label>
               <label className="field"><span>Description</span><textarea data-validation-path="description" disabled={actionBusy !== null} rows={5} value={draft.description} placeholder="Visible card description" onChange={(event) => updateDraft("description", event.target.value)} /></label>
+            </section>
+            <section className="metadata-section visual-layout-editor" inert={editorLockedByRecovery ? true : undefined} aria-disabled={editorLockedByRecovery}>
+              <div className="section-title"><div><span className="eyebrow">Visual only</span><h2>Visual Layout</h2></div><span className="status-pill">This Card</span></div>
+              <label className="field"><span>Element</span><select disabled={actionBusy !== null} value={selectedVisualLayoutField} onChange={(event) => setSelectedVisualLayoutField(event.target.value as CardVisualLayoutField)}>{CARD_VISUAL_LAYOUT_FIELDS.map((field) => <option key={field} value={field}>{field === "card_type" ? "Card Type" : field[0].toUpperCase() + field.slice(1)}</option>)}</select></label>
+              <div className="number-fields">
+                <label className="field"><span>X <small>{selectedVisualLayoutOverride?.x === undefined ? "Global" : "This Card"}</small></span><input aria-label="Visual layout X" disabled={actionBusy !== null} type="number" step="1" value={displayedVisualLayoutX} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && visualLayoutOverrides) acceptVisualLayoutOverrides(updateVisualLayoutCoordinate(visualLayoutOverrides, selectedVisualLayoutField, "x", value)); }} /></label>
+                <label className="field"><span>Y <small>{selectedVisualLayoutOverride?.y === undefined ? "Global" : "This Card"}</small></span><input aria-label="Visual layout Y" disabled={actionBusy !== null} type="number" step="1" value={displayedVisualLayoutY} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && visualLayoutOverrides) acceptVisualLayoutOverrides(updateVisualLayoutCoordinate(visualLayoutOverrides, selectedVisualLayoutField, "y", value)); }} /></label>
+              </div>
+              <p className="visual-layout-help">Arrow keys nudge 1 logical pixel; Shift + Arrow nudges 10. Inputs keep their normal keyboard behavior.</p>
+              <div className="visual-layout-actions"><button className="ghost" disabled={actionBusy !== null || selectedVisualLayoutOverride?.x === undefined} onClick={() => visualLayoutOverrides && acceptVisualLayoutOverrides(updateVisualLayoutCoordinate(visualLayoutOverrides, selectedVisualLayoutField, "x", undefined))}>Reset X</button><button className="ghost" disabled={actionBusy !== null || selectedVisualLayoutOverride?.y === undefined} onClick={() => visualLayoutOverrides && acceptVisualLayoutOverrides(updateVisualLayoutCoordinate(visualLayoutOverrides, selectedVisualLayoutField, "y", undefined))}>Reset Y</button><button className="ghost" disabled={actionBusy !== null || !selectedVisualLayoutOverride} onClick={() => visualLayoutOverrides && acceptVisualLayoutOverrides(resetVisualLayoutElement(visualLayoutOverrides, selectedVisualLayoutField))}>Reset Element</button></div>
             </section>
             <section className="metadata-section gameplay-metadata" inert={editorLockedByRecovery ? true : undefined} aria-disabled={editorLockedByRecovery}>
               <div className="section-title"><div><span className="eyebrow">Structured data</span><h2>Gameplay</h2></div><span className={`status-pill validation-${validation?.status ?? "invalid"}`}>{validation?.status === "valid" ? "Valid" : validation?.status === "warnings" ? "Warnings" : "Invalid"}</span></div>

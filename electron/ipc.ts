@@ -167,7 +167,7 @@ export function registerIpc(paths: DesktopPaths): void {
     const request = validateStudioMetadataRequest(requestValue);
     const card = await findById(request.cardId);
     try {
-      return await studio.saveMetadata(card, request.metadata);
+      return await studio.saveMetadata(card, request.metadata, request.visualLayoutOverrides);
     } catch (error) {
       await log(`studio metadata ${card.id}: ${error instanceof Error ? error.message : String(error)}`);
       throw new Error("Could not save game metadata. Check the field values and try again.");
@@ -219,12 +219,13 @@ export function registerIpc(paths: DesktopPaths): void {
     const request = validateStudioMetadataRequest(requestValue);
     const card = await findById(request.cardId);
     try {
-      const result = await studio.render(card, request.metadata);
+      const result = await studio.render(card, request.metadata, request.visualLayoutOverrides);
       return {
         dataUrl: `data:image/png;base64,${Buffer.from(result.bytes).toString("base64")}`,
         sha256: result.sha256,
         cleanSha256: result.cleanSha256,
-        warnings: result.warnings
+        warnings: result.warnings,
+        effectiveVisualLayout: result.effectiveVisualLayout
       };
     } catch (error) {
       await log(`studio preview ${card.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -235,7 +236,7 @@ export function registerIpc(paths: DesktopPaths): void {
     const request = validateStudioMetadataRequest(requestValue);
     const card = await findById(request.cardId);
     try {
-      return await studio.exportRendered(card, request.metadata);
+      return await studio.exportRendered(card, request.metadata, request.visualLayoutOverrides);
     } catch (error) {
       await log(`studio render export ${card.id}: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
@@ -245,7 +246,7 @@ export function registerIpc(paths: DesktopPaths): void {
     const request = validateStudioGameExportRequest(requestValue);
     const card = await findById(request.cardId);
     try {
-      return await studio.exportGameCard(card, request.metadata, request.visualSource, requireExportRoot());
+      return await studio.exportGameCard(card, request.metadata, request.visualSource, requireExportRoot(), request.visualLayoutOverrides);
     } catch (error) {
       await log(`studio game export ${card.id}: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
@@ -255,7 +256,7 @@ export function registerIpc(paths: DesktopPaths): void {
     const request = validateStudioGameExportRequest(requestValue);
     const card = await findById(request.cardId);
     try {
-      return await studio.exportIndividualGameCardFlat(card, request.metadata, request.visualSource, requireExportRoot());
+      return await studio.exportIndividualGameCardFlat(card, request.metadata, request.visualSource, requireExportRoot(), request.visualLayoutOverrides);
     } catch (error) {
       await log(`studio flat game export ${card.id}: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
@@ -319,7 +320,7 @@ export function registerIpc(paths: DesktopPaths): void {
   });
   ipcMain.handle(IPC.studioSaveDraft, async (_event, requestValue: unknown) => {
     const request = validateStudioDraftSaveRequest(requestValue);
-    return saveStudioDraft(await findById(request.cardId), request.metadata, paths.studioRoot);
+    return saveStudioDraft(await findById(request.cardId), request.metadata, paths.studioRoot, request.visualLayoutOverrides);
   });
   ipcMain.handle(IPC.studioDiscardDraft, async (_event, cardIdValue: unknown) => {
     await discardStudioDraft(await findById(cardIdValue), paths.studioRoot);

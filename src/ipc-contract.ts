@@ -2,6 +2,7 @@ import type { CatalogCard } from "./catalog.ts";
 import type { BatchReport, ExportedCard, OutputLayout } from "./exporter.ts";
 import type { CatalogFilters } from "./filters.ts";
 import type { CardGameMetadata, CleanAssetState } from "./card-studio.ts";
+import type { CardVisualLayoutOverrides, EffectiveVisualLayout } from "./card-layout-overrides.ts";
 import type { GameCardExportResult, GameVisualSource } from "./game-card-exporter.ts";
 import type {
   AxieSlotCardRequest,
@@ -88,11 +89,14 @@ export interface StudioCardPayload {
   metadataSourceSchemaVersion: 1 | 2 | null;
   metadataMigrated: boolean;
   clean: CleanAssetState;
+  visualLayoutOverrides: CardVisualLayoutOverrides;
+  effectiveVisualLayout: EffectiveVisualLayout;
 }
 
 export interface StudioMetadataRequest {
   cardId: string;
   metadata: CardGameMetadata;
+  visualLayoutOverrides?: CardVisualLayoutOverrides;
 }
 
 export interface StudioPreviewPayload {
@@ -100,6 +104,7 @@ export interface StudioPreviewPayload {
   sha256: string;
   cleanSha256: string;
   warnings: string[];
+  effectiveVisualLayout: EffectiveVisualLayout;
 }
 
 export interface StudioExportPayload {

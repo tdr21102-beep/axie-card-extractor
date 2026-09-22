@@ -1,4 +1,5 @@
 import { validateGameMetadata } from "./card-studio.ts";
+import { parseCardVisualLayoutOverrides } from "./card-layout-overrides.ts";
 import type { BatchRequest, StudioGameExportRequest, StudioMetadataRequest } from "./ipc-contract.ts";
 import type { CatalogFilters } from "./filters.ts";
 import type {
@@ -55,7 +56,8 @@ export function validateStudioMetadataRequest(value: unknown): StudioMetadataReq
   const candidate = value as Record<string, unknown>;
   return {
     cardId: validateCardId(candidate.cardId),
-    metadata: validateGameMetadata(candidate.metadata)
+    metadata: validateGameMetadata(candidate.metadata),
+    ...(candidate.visualLayoutOverrides === undefined ? {} : { visualLayoutOverrides: parseCardVisualLayoutOverrides(candidate.visualLayoutOverrides) })
   };
 }
 
@@ -129,7 +131,11 @@ export function validateStudioDraftSaveRequest(value: unknown): StudioDraftSaveR
   const candidate = validateRecord(value, "studio draft request");
   const metadata = validateRecord(candidate.metadata, "studio draft metadata");
   if (JSON.stringify(metadata).length > 250_000) throw new Error("Studio draft is too large");
-  return { cardId: validateCardId(candidate.cardId), metadata };
+  return {
+    cardId: validateCardId(candidate.cardId),
+    metadata,
+    ...(candidate.visualLayoutOverrides === undefined ? {} : { visualLayoutOverrides: parseCardVisualLayoutOverrides(candidate.visualLayoutOverrides) })
+  };
 }
 
 export function validateGameSetExportRequest(value: unknown): GameSetExportRequest {
