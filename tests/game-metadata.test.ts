@@ -62,19 +62,19 @@ const complete = (): CardGameMetadata => ({
 
 test("centralizes the current buff and debuff authoring vocabulary", () => {
   assert.deepEqual(statusDefinitionsForEffectType("buff").map((definition) => definition.id), [
-    "attack_up", "defense_up", "speed_up", "regen"
+    "physical_attack_up", "magical_attack_up", "physical_defense_up", "magical_defense_up", "skill_up", "speed_up", "regen"
   ]);
   assert.deepEqual(statusDefinitionsForEffectType("debuff").map((definition) => definition.id), [
-    "attack_down", "defense_down", "speed_down", "poison", "bleed", "burn"
+    "physical_attack_down", "magical_attack_down", "physical_defense_down", "magical_defense_down", "skill_down", "speed_down", "poison", "bleed", "burn"
   ]);
-  assert.equal(defaultStatusForEffectType("buff"), "attack_up");
-  assert.equal(defaultStatusForEffectType("debuff"), "attack_down");
+  assert.equal(defaultStatusForEffectType("buff"), "physical_attack_up");
+  assert.equal(defaultStatusForEffectType("debuff"), "physical_attack_down");
   assert.deepEqual(STATUS_DEFINITIONS.map((definition) => definition.label), [
-    "Attack Up", "Defense Up", "Speed Up", "Regen",
-    "Attack Down", "Defense Down", "Speed Down", "Poison", "Bleed", "Burn"
+    "Physical Attack Up", "Magical Attack Up", "Physical Defense Up", "Magical Defense Up", "Skill Up", "Speed Up", "Regen",
+    "Physical Attack Down", "Magical Attack Down", "Physical Defense Down", "Magical Defense Down", "Skill Down", "Speed Down", "Poison", "Bleed", "Burn"
   ]);
   const ids = STATUS_DEFINITIONS.map((definition) => definition.id);
-  for (const excluded of ["freeze", "physical_attack_up", "magical_attack_up", "physical_defense_up", "magical_defense_up", "skill_up"]) {
+  for (const excluded of ["freeze", "morale_up", "morale_down"]) {
     assert.ok(!ids.includes(excluded), `${excluded} must not be authorable yet`);
   }
 });
@@ -82,26 +82,27 @@ test("centralizes the current buff and debuff authoring vocabulary", () => {
 test("status defaults and effect type changes are deterministic while legacy strings remain compatible", () => {
   const addedBuff = addCardEffect({ ...complete(), effects: [] }, "buff");
   assert.deepEqual(addedBuff.effects[0], {
-    id: "buff_1", type: "buff", target: "single_enemy", status: "attack_up", stacks: 1, duration: 1
+    id: "buff_1", type: "buff", target: "single_enemy", status: "physical_attack_up", stacks: 1, duration: 1
   });
   const asDebuff = replaceCardEffectType(addedBuff, 0, "debuff");
   assert.deepEqual(asDebuff.effects[0], {
-    id: "buff_1", type: "debuff", target: "single_enemy", status: "attack_down", stacks: 1, duration: 1
+    id: "buff_1", type: "debuff", target: "single_enemy", status: "physical_attack_down", stacks: 1, duration: 1
   });
   const asBuffAgain = replaceCardEffectType(asDebuff, "buff_1", "buff");
   assert.deepEqual(asBuffAgain.effects[0], {
-    id: "buff_1", type: "buff", target: "single_enemy", status: "attack_up", stacks: 1, duration: 1
+    id: "buff_1", type: "buff", target: "single_enemy", status: "physical_attack_up", stacks: 1, duration: 1
   });
 
   const legacy = complete();
   legacy.effects = [
-    { id: "buff_legacy", type: "buff", target: "self", status: "morale_up", stacks: 1, duration: 1 },
-    { id: "debuff_legacy", type: "debuff", target: "single_enemy", status: "slow", stacks: 1, duration: 1 }
+    { id: "buff_legacy", type: "buff", target: "self", status: "attack_up", stacks: 1, duration: 1 },
+    { id: "debuff_legacy", type: "debuff", target: "single_enemy", status: "attack_down", stacks: 1, duration: 1 }
   ];
   assert.equal(validateGameMetadataV2(legacy).status, "valid");
   const advancedLegacy = parseAdvancedGameMetadataJson(JSON.stringify(legacy), complete());
   assert.equal(advancedLegacy.accepted, true);
-  assert.equal((advancedLegacy.metadata?.effects[1] as { status: string } | undefined)?.status, "slow");
+  assert.equal((advancedLegacy.metadata?.effects[0] as { status: string } | undefined)?.status, "attack_up");
+  assert.equal((advancedLegacy.metadata?.effects[1] as { status: string } | undefined)?.status, "attack_down");
   const canonical = { ...complete(), effects: [{ id: "speed_down_1", type: "debuff" as const, target: "all_enemies" as const, status: "speed_down", stacks: 1, duration: 1 }] };
   assert.equal(validateGameMetadataV2(canonical).status, "valid");
   const incompatibleCanonical = validateGameMetadataV2({
@@ -345,7 +346,7 @@ test("effect helpers preserve order, immutability and deterministic unique ids",
     id: "buff_1",
     type: "buff",
     target: "single_enemy",
-    status: "attack_up",
+    status: "physical_attack_up",
     stacks: 1,
     duration: 1
   }]);

@@ -23,24 +23,42 @@ export interface StatusDefinition {
 }
 
 /**
- * Authoring vocabulary for status effects. Existing documents intentionally
- * remain parser-compatible with legacy string identifiers; this list controls
- * new defaults and the standard editor UI without silently migrating data.
+ * Card Studio V2 authoring vocabulary for status effects. Existing documents
+ * intentionally remain parser-compatible with legacy string identifiers; this
+ * list controls new defaults and the standard editor UI without silently
+ * migrating data.
  */
 export const STATUS_DEFINITIONS: readonly StatusDefinition[] = [
-  { id: "attack_up", label: "Attack Up", effectType: "buff" },
-  { id: "defense_up", label: "Defense Up", effectType: "buff" },
+  { id: "physical_attack_up", label: "Physical Attack Up", effectType: "buff" },
+  { id: "magical_attack_up", label: "Magical Attack Up", effectType: "buff" },
+  { id: "physical_defense_up", label: "Physical Defense Up", effectType: "buff" },
+  { id: "magical_defense_up", label: "Magical Defense Up", effectType: "buff" },
+  { id: "skill_up", label: "Skill Up", effectType: "buff" },
   { id: "speed_up", label: "Speed Up", effectType: "buff" },
   { id: "regen", label: "Regen", effectType: "buff" },
-  { id: "attack_down", label: "Attack Down", effectType: "debuff" },
-  { id: "defense_down", label: "Defense Down", effectType: "debuff" },
+  { id: "physical_attack_down", label: "Physical Attack Down", effectType: "debuff" },
+  { id: "magical_attack_down", label: "Magical Attack Down", effectType: "debuff" },
+  { id: "physical_defense_down", label: "Physical Defense Down", effectType: "debuff" },
+  { id: "magical_defense_down", label: "Magical Defense Down", effectType: "debuff" },
+  { id: "skill_down", label: "Skill Down", effectType: "debuff" },
   { id: "speed_down", label: "Speed Down", effectType: "debuff" },
   { id: "poison", label: "Poison", effectType: "debuff" },
   { id: "bleed", label: "Bleed", effectType: "debuff" },
   { id: "burn", label: "Burn", effectType: "debuff" }
 ];
 
+/** Known V1/V2 identifiers kept readable in the editor but never migrated. */
+export const LEGACY_STATUS_DEFINITIONS: readonly StatusDefinition[] = [
+  { id: "attack_up", label: "Attack Up (legacy)", effectType: "buff" },
+  { id: "defense_up", label: "Defense Up (legacy)", effectType: "buff" },
+  { id: "attack_down", label: "Attack Down (legacy)", effectType: "debuff" },
+  { id: "defense_down", label: "Defense Down (legacy)", effectType: "debuff" }
+];
+
 export function statusDefinitionForId(id: string): StatusDefinition | null {
+  // Only the current authoring vocabulary participates in canonical
+  // compatibility checks. Legacy and game-specific identifiers remain
+  // readable/contextual instead of being silently migrated or rejected.
   return STATUS_DEFINITIONS.find((definition) => definition.id === id) ?? null;
 }
 export function statusDefinitionsForEffectType(effectType: StatusEffectType): readonly StatusDefinition[] {
