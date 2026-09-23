@@ -29,15 +29,17 @@ import { CARD_TYPE_DEFINITIONS } from "../src/card-type-definitions.ts";
 import type { BatchPlan, PreviewPayload, StudioCardPayload, StudioPreviewPayload } from "../src/ipc-contract.ts";
 import {
   CARD_VISUAL_LAYOUT_FIELDS,
+  resetVisualLayoutElement,
   resetVisualLayoutPosition,
   updateVisualLayoutCoordinate,
+  updateVisualLayoutProperty,
+  type CardVisualLayoutFieldOverride,
   type CardVisualLayoutField
 } from "../src/card-layout-overrides.ts";
 import {
   draggedLogicalPosition,
   isVisualLayoutNudgeKey,
   logicalTextLayoutToDisplayStyle,
-  visualLayoutGhostPosition,
   VISUAL_LAYOUT_LOGICAL_SIZE
 } from "../src/visual-layout-editor.ts";
 import type {
@@ -275,6 +277,7 @@ type VisualLayoutGhost = {
   field: CardVisualLayoutField;
   x: number;
   y: number;
+  patch: CardVisualLayoutFieldOverride;
 };
 
 function cloneStudioMetadata(metadata: StudioMetadata): StudioMetadata {
@@ -305,6 +308,7 @@ type VisualLayoutDrag = {
   field: CardVisualLayoutField;
   startPoint: { clientX: number; clientY: number };
   startPosition: { x: number; y: number };
+  patch: CardVisualLayoutFieldOverride;
 };
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -676,10 +680,29 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     return acceptEditorState({ metadata: draft, visualLayoutOverrides: next });
   };
 
+  const beginVisualLayoutDraft = (field: CardVisualLayoutField = selectedVisualLayoutField): VisualLayoutGhost | null => {
+    const effective = studioCard?.effectiveVisualLayout[field];
+    if (!effective || !visualLayoutOverrides) return null;
+    const patch = { ...(visualLayoutOverrides.fields[field] ?? {}) };
+    return { field, x: patch.x ?? effective.x, y: patch.y ?? effective.y, patch };
+  };
+
+  const updateVisualLayoutDraftProperty = <K extends keyof CardVisualLayoutFieldOverride>(property: K, value: CardVisualLayoutFieldOverride[K] | undefined) => {
+    const current = visualLayoutGhost?.field === selectedVisualLayoutField ? visualLayoutGhost : beginVisualLayoutDraft();
+    if (!current) return;
+    const patch = { ...current.patch, [property]: value } as CardVisualLayoutFieldOverride;
+    if (value === undefined) delete patch[property];
+    setVisualLayoutGhost({ ...current, patch, x: patch.x ?? current.x, y: patch.y ?? current.y });
+  };
+
   const commitVisualLayoutGhost = (ghost: VisualLayoutGhost | null = visualLayoutGhost) => {
     if (!ghost || !visualLayoutOverrides) return false;
-    const withX = updateVisualLayoutCoordinate(visualLayoutOverrides, ghost.field, "x", ghost.x);
-    const next = updateVisualLayoutCoordinate(withX, ghost.field, "y", ghost.y);
+    let next = updateVisualLayoutProperty(visualLayoutOverrides, ghost.field, "x", ghost.patch.x);
+    next = updateVisualLayoutProperty(next, ghost.field, "y", ghost.patch.y);
+    for (const [key, value] of Object.entries(ghost.patch)) {
+      if (key === "x" || key === "y") continue;
+      next = updateVisualLayoutProperty(next, ghost.field, key as keyof CardVisualLayoutFieldOverride, value as never);
+    }
     const changed = JSON.stringify(next) !== JSON.stringify(visualLayoutOverrides);
     setVisualLayoutGhost(null);
     return changed ? acceptVisualLayoutOverrides(next) : false;
@@ -724,10 +747,14 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
         const current = visualLayoutGhost?.field === selectedVisualLayoutField
           ? visualLayoutGhost[axis]
           : visualLayoutOverrides.fields[selectedVisualLayoutField]?.[axis] ?? effective[axis];
-        setVisualLayoutGhost(visualLayoutGhostPosition(selectedVisualLayoutField, {
+        const patch = { ...(visualLayoutGhost?.field === selectedVisualLayoutField ? visualLayoutGhost.patch : visualLayoutOverrides.fields[selectedVisualLayoutField] ?? {}) };
+        const position = {
           x: axis === "x" ? current + direction * (event.shiftKey ? 10 : 1) : (visualLayoutGhost?.field === selectedVisualLayoutField ? visualLayoutGhost.x : visualLayoutOverrides.fields[selectedVisualLayoutField]?.x ?? effective.x),
           y: axis === "y" ? current + direction * (event.shiftKey ? 10 : 1) : (visualLayoutGhost?.field === selectedVisualLayoutField ? visualLayoutGhost.y : visualLayoutOverrides.fields[selectedVisualLayoutField]?.y ?? effective.y)
-        }));
+        };
+        patch.x = position.x;
+        patch.y = position.y;
+        setVisualLayoutGhost({ field: selectedVisualLayoutField, ...position, patch });
       } else if (visualLayoutGhost && event.key === "Enter") {
         event.preventDefault();
         commitVisualLayoutGhost();
@@ -754,7 +781,8 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
       startPosition: {
         x: visualLayoutOverrides?.fields[field]?.x ?? effective.x,
         y: visualLayoutOverrides?.fields[field]?.y ?? effective.y
-      }
+      },
+      patch: { ...(visualLayoutGhost?.field === field ? visualLayoutGhost.patch : visualLayoutOverrides?.fields[field] ?? {}) }
     };
     setVisualLayoutGhost(null);
   };
@@ -764,7 +792,8 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     const bounds = previewFrameRef.current?.getBoundingClientRect();
     if (!drag || drag.pointerId !== event.pointerId || !bounds) return;
     const position = draggedLogicalPosition(drag.startPosition, drag.startPoint, event, bounds);
-    setVisualLayoutGhost(visualLayoutGhostPosition(drag.field, position));
+    const patch = { ...drag.patch, x: position.x, y: position.y };
+    setVisualLayoutGhost({ field: drag.field, ...position, patch });
   };
 
   const finishVisualLayoutDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -775,11 +804,11 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     if (!drag || drag.pointerId !== event.pointerId || !bounds || !visualLayoutOverrides) return;
     const position = draggedLogicalPosition(drag.startPosition, drag.startPoint, event, bounds);
     if (position.x === drag.startPosition.x && position.y === drag.startPosition.y) {
-      setVisualLayoutGhost({ field: drag.field, ...drag.startPosition });
+      setVisualLayoutGhost({ field: drag.field, ...drag.startPosition, patch: { ...(visualLayoutOverrides.fields[drag.field] ?? {}) } });
       return;
     }
-    const withX = updateVisualLayoutCoordinate(visualLayoutOverrides, drag.field, "x", position.x);
-    acceptVisualLayoutOverrides(updateVisualLayoutCoordinate(withX, drag.field, "y", position.y));
+    const pending = drag.patch;
+    commitVisualLayoutGhost({ field: drag.field, x: position.x, y: position.y, patch: { ...pending, x: position.x, y: position.y } });
   };
 
   const cancelVisualLayoutDrag = () => {
@@ -1414,7 +1443,7 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
             <div ref={previewFrameRef} className={`studio-preview-frame ${visualSource === "rendered" && !studioCard.clean.available ? "missing" : ""}`}>
               {shownPreview && <img src={shownPreview} alt={`${draft.name || studioCard.source.name} ${visualSource === "original" ? "original placeholder" : "rendered preview"}`} />}
               {visualLayoutGhost && visualSource === "rendered" && preview ? (() => {
-                const ghostLayout = studioCard.effectiveVisualLayout[visualLayoutGhost.field];
+                const ghostLayout = { ...studioCard.effectiveVisualLayout[visualLayoutGhost.field], ...visualLayoutGhost.patch };
                 const frame = previewFrameRef.current?.getBoundingClientRect();
                 const display = logicalTextLayoutToDisplayStyle(ghostLayout, visualLayoutGhost, { width: frame?.width ?? 400, height: frame?.height ?? 600 });
                 const ghostValue = visualLayoutGhost.field === "cost" ? String(draft.cost)
@@ -1433,9 +1462,11 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
               {visualSource === "rendered" && studioCard.clean.available && preview && (
                 <div className="visual-layout-overlay" aria-label="Visual layout editor overlay">
                   {CARD_VISUAL_LAYOUT_FIELDS.map((field) => {
-                    const layout = studioCard.effectiveVisualLayout[field];
-                    if (!layout) return null;
                     const dragged = visualLayoutGhost?.field === field ? visualLayoutGhost : null;
+                    const layout = studioCard.effectiveVisualLayout[field]
+                      ? { ...studioCard.effectiveVisualLayout[field], ...(dragged?.patch ?? {}) }
+                      : null;
+                    if (!layout) return null;
                     const x = dragged?.x ?? visualLayoutOverrides?.fields[field]?.x ?? layout.x;
                     const y = dragged?.y ?? visualLayoutOverrides?.fields[field]?.y ?? layout.y;
                     return <button
@@ -1514,11 +1545,26 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
               <div className="section-title"><div><span className="eyebrow">Visual only</span><h2>Visual Layout</h2></div><span className="status-pill">This Card</span></div>
               <label className="field"><span>Element</span><select disabled={actionBusy !== null} value={selectedVisualLayoutField} onChange={(event) => setSelectedVisualLayoutField(event.target.value as CardVisualLayoutField)}>{CARD_VISUAL_LAYOUT_FIELDS.map((field) => <option key={field} value={field}>{field === "card_type" ? "Card Type" : field[0].toUpperCase() + field.slice(1)}</option>)}</select></label>
               <div className="number-fields">
-                <label className="field"><span>X <small>{selectedVisualLayoutOverride?.x === undefined ? "Global" : "This Card"}</small></span><input aria-label="Visual layout X" disabled={actionBusy !== null} type="number" step="1" value={displayedVisualLayoutX} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && visualLayoutOverrides) acceptVisualLayoutOverrides(updateVisualLayoutCoordinate(visualLayoutOverrides, selectedVisualLayoutField, "x", value)); }} /></label>
-                <label className="field"><span>Y <small>{selectedVisualLayoutOverride?.y === undefined ? "Global" : "This Card"}</small></span><input aria-label="Visual layout Y" disabled={actionBusy !== null} type="number" step="1" value={displayedVisualLayoutY} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && visualLayoutOverrides) acceptVisualLayoutOverrides(updateVisualLayoutCoordinate(visualLayoutOverrides, selectedVisualLayoutField, "y", value)); }} /></label>
+                <label className="field"><span>X <small>{(visualLayoutGhost?.field === selectedVisualLayoutField ? visualLayoutGhost.patch.x : selectedVisualLayoutOverride?.x) === undefined ? "Inherited" : "Override"}</small></span><input aria-label="Visual layout X" disabled={actionBusy !== null} type="number" step="1" value={displayedVisualLayoutX} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value)) updateVisualLayoutDraftProperty("x", value); }} /></label>
+                <label className="field"><span>Y <small>{(visualLayoutGhost?.field === selectedVisualLayoutField ? visualLayoutGhost.patch.y : selectedVisualLayoutOverride?.y) === undefined ? "Inherited" : "Override"}</small></span><input aria-label="Visual layout Y" disabled={actionBusy !== null} type="number" step="1" value={displayedVisualLayoutY} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value)) updateVisualLayoutDraftProperty("y", value); }} /></label>
               </div>
+              {selectedVisualLayout && <>
+                <div className="number-fields">
+                  <label className="field"><span>Font Size <small>{(visualLayoutGhost?.field === selectedVisualLayoutField ? visualLayoutGhost.patch.font_size : selectedVisualLayoutOverride?.font_size) === undefined ? "Inherited" : "Override"}</small></span><input aria-label="Visual layout Font Size" disabled={actionBusy !== null} type="number" min="1" step="1" value={(visualLayoutGhost?.field === selectedVisualLayoutField ? visualLayoutGhost.patch.font_size : undefined) ?? selectedVisualLayoutOverride?.font_size ?? selectedVisualLayout.font_size} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) updateVisualLayoutDraftProperty("font_size", value); }} /></label>
+                  <label className="field"><span>Alignment</span><select aria-label="Visual layout Alignment" disabled={actionBusy !== null} value={(visualLayoutGhost?.field === selectedVisualLayoutField ? visualLayoutGhost.patch.alignment : undefined) ?? selectedVisualLayoutOverride?.alignment ?? selectedVisualLayout.alignment} onChange={(event) => updateVisualLayoutDraftProperty("alignment", event.target.value as CardVisualLayoutFieldOverride["alignment"])}><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>
+                </div>
+                <div className="number-fields">
+                  <label className="field"><span>Text Color</span><input aria-label="Visual layout Text Color" type="color" disabled={actionBusy !== null} value={(visualLayoutGhost?.field === selectedVisualLayoutField ? visualLayoutGhost.patch.color : undefined) ?? selectedVisualLayoutOverride?.color ?? selectedVisualLayout.color} onChange={(event) => updateVisualLayoutDraftProperty("color", event.target.value)} /></label>
+                  <label className="field"><span>Stroke Color</span><input aria-label="Visual layout Stroke Color" type="color" disabled={actionBusy !== null} value={(visualLayoutGhost?.field === selectedVisualLayoutField ? visualLayoutGhost.patch.stroke_color : undefined) ?? selectedVisualLayoutOverride?.stroke_color ?? selectedVisualLayout.stroke_color} onChange={(event) => updateVisualLayoutDraftProperty("stroke_color", event.target.value)} /></label>
+                  <label className="field"><span>Stroke Width</span><input aria-label="Visual layout Stroke Width" type="number" min="0" step="1" disabled={actionBusy !== null} value={(visualLayoutGhost?.field === selectedVisualLayoutField ? visualLayoutGhost.patch.stroke_width : undefined) ?? selectedVisualLayoutOverride?.stroke_width ?? selectedVisualLayout.stroke_width} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value >= 0) updateVisualLayoutDraftProperty("stroke_width", value); }} /></label>
+                </div>
+                <div className="number-fields">
+                  <label className="field"><span>Max Width</span><input aria-label="Visual layout Max Width" type="number" min="1" step="1" disabled={actionBusy !== null} value={(visualLayoutGhost?.field === selectedVisualLayoutField ? visualLayoutGhost.patch.max_width : undefined) ?? selectedVisualLayoutOverride?.max_width ?? selectedVisualLayout.max_width ?? ""} onChange={(event) => { const value = event.target.value === "" ? null : Number(event.target.value); if (value === null || (Number.isFinite(value) && value > 0)) updateVisualLayoutDraftProperty("max_width", value); }} /></label>
+                  <label className="field"><span>Line Spacing</span><input aria-label="Visual layout Line Spacing" type="number" min="0.1" step="0.05" disabled={actionBusy !== null} value={(visualLayoutGhost?.field === selectedVisualLayoutField ? visualLayoutGhost.patch.line_spacing : undefined) ?? selectedVisualLayoutOverride?.line_spacing ?? selectedVisualLayout.line_spacing} onChange={(event) => { const value = Number(event.target.value); if (Number.isFinite(value) && value > 0) updateVisualLayoutDraftProperty("line_spacing", value); }} /></label>
+                </div>
+              </>}
               <p className="visual-layout-help">Arrow keys nudge 1 logical pixel; Shift + Arrow nudges 10. Inputs keep their normal keyboard behavior.</p>
-              <div className="visual-layout-actions"><button className="ghost" disabled={actionBusy !== null || !visualLayoutGhost} onClick={() => commitVisualLayoutGhost()}>Apply &amp; Render</button><button className="ghost" disabled={actionBusy !== null || !visualLayoutGhost} onClick={() => setVisualLayoutGhost(null)}>Cancel</button><button className="ghost" disabled={actionBusy !== null || selectedVisualLayoutOverride?.x === undefined} onClick={() => visualLayoutOverrides && acceptVisualLayoutOverrides(updateVisualLayoutCoordinate(visualLayoutOverrides, selectedVisualLayoutField, "x", undefined))}>Reset X</button><button className="ghost" disabled={actionBusy !== null || selectedVisualLayoutOverride?.y === undefined} onClick={() => visualLayoutOverrides && acceptVisualLayoutOverrides(updateVisualLayoutCoordinate(visualLayoutOverrides, selectedVisualLayoutField, "y", undefined))}>Reset Y</button><button className="ghost" disabled={actionBusy !== null || !selectedVisualLayoutOverride} onClick={() => visualLayoutOverrides && acceptVisualLayoutOverrides(resetVisualLayoutPosition(visualLayoutOverrides, selectedVisualLayoutField))}>Reset Position</button></div>
+              <div className="visual-layout-actions"><button className="ghost" disabled={actionBusy !== null || !visualLayoutGhost} onClick={() => commitVisualLayoutGhost()}>Apply &amp; Render</button><button className="ghost" disabled={actionBusy !== null || !visualLayoutGhost} onClick={() => setVisualLayoutGhost(null)}>Cancel</button><button className="ghost" disabled={actionBusy !== null || !selectedVisualLayoutOverride} onClick={() => visualLayoutOverrides && acceptVisualLayoutOverrides(resetVisualLayoutPosition(visualLayoutOverrides, selectedVisualLayoutField))}>Reset Position</button><button className="ghost" disabled={actionBusy !== null || !selectedVisualLayoutOverride} onClick={() => visualLayoutOverrides && acceptVisualLayoutOverrides(resetVisualLayoutElement(visualLayoutOverrides, selectedVisualLayoutField))}>Reset Element</button></div>
             </section>
             <section className="metadata-section gameplay-metadata" inert={editorLockedByRecovery ? true : undefined} aria-disabled={editorLockedByRecovery}>
               <div className="section-title"><div><span className="eyebrow">Structured data</span><h2>Gameplay</h2></div><span className={`status-pill validation-${validation?.status ?? "invalid"}`}>{validation?.status === "valid" ? "Valid" : validation?.status === "warnings" ? "Warnings" : "Invalid"}</span></div>

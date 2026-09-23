@@ -11,7 +11,8 @@ import {
   parseCardVisualLayoutOverrides,
   resetVisualLayoutElement,
   resetVisualLayoutPosition,
-  updateVisualLayoutCoordinate
+  updateVisualLayoutCoordinate,
+  updateVisualLayoutProperty
 } from "../src/card-layout-overrides.ts";
 import {
   draggedLogicalPosition,
@@ -100,10 +101,29 @@ test("editor geometry scales logical selection rectangles without distortion", (
 });
 
 test("visual layout parser rejects non-sparse or non-finite authoring documents", () => {
-  assert.throws(() => parseCardVisualLayoutOverrides({ schema_version: 1, fields: { name: {} } }), /x or y/);
+  assert.throws(() => parseCardVisualLayoutOverrides({ schema_version: 1, fields: { name: {} } }), /property/);
   assert.throws(() => parseCardVisualLayoutOverrides({ schema_version: 1, fields: { artwork: { x: 2 } } }), /not supported/);
   assert.throws(() => parseCardVisualLayoutOverrides({ schema_version: 1, fields: { name: { x: "2" } } }), /finite/);
   assert.equal(JSON.parse(readFileSync(resolve("config/card_layout.json"), "utf8")).version, 2);
+});
+
+test("visual layout overrides preserve typography and appearance sparsely", () => {
+  const global = layout();
+  const overrides = parseCardVisualLayoutOverrides({
+    schema_version: 1,
+    fields: { name: { font_size: 48, alignment: "right", color: "#FFD966", stroke_width: 3, max_width: 420, line_spacing: 1.2 } }
+  });
+  const effective = effectiveVisualLayout(global, overrides).name;
+  assert.equal(effective.font_size, 48);
+  assert.equal(effective.alignment, "right");
+  assert.equal(effective.color, "#FFD966");
+  assert.equal(effective.stroke_width, 3);
+  assert.equal(effective.max_width, 420);
+  assert.equal(effective.line_spacing, 1.2);
+  assert.equal(effective.inherited_x, true);
+  const reset = updateVisualLayoutProperty(overrides, "name", "color", undefined);
+  assert.equal(reset.fields.name?.font_size, 48);
+  assert.equal(reset.fields.name?.color, undefined);
 });
 
 

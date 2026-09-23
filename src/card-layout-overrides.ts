@@ -9,6 +9,15 @@ export type CardVisualLayoutField = (typeof CARD_VISUAL_LAYOUT_FIELDS)[number];
 export interface CardVisualLayoutFieldOverride {
   x?: number;
   y?: number;
+  width?: number;
+  height?: number;
+  font_size?: number;
+  alignment?: CardTextFieldLayout["alignment"];
+  color?: string;
+  stroke_color?: string;
+  stroke_width?: number;
+  max_width?: number | null;
+  line_spacing?: number;
 }
 
 export interface CardVisualLayoutOverrides {
@@ -55,6 +64,34 @@ function finiteCoordinate(value: unknown, label: string): number {
   return value;
 }
 
+const OVERRIDE_KEYS = ["x", "y", "width", "height", "font_size", "alignment", "color", "stroke_color", "stroke_width", "max_width", "line_spacing"] as const;
+type VisualOverrideKey = (typeof OVERRIDE_KEYS)[number];
+const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/iu;
+
+function parseOverrideValue(key: VisualOverrideKey, value: unknown, label: string): CardVisualLayoutFieldOverride[VisualOverrideKey] {
+  if (["alignment"].includes(key)) {
+    if (value !== "left" && value !== "center" && value !== "right") throw new Error(`${label} must be left, center, or right`);
+    return value;
+  }
+  if (["color", "stroke_color"].includes(key)) {
+    if (typeof value !== "string" || !HEX_COLOR.test(value)) throw new Error(`${label} must be a hex color`);
+    return value;
+  }
+  if (key === "max_width") {
+    if (value !== null && (typeof value !== "number" || !Number.isFinite(value) || value <= 0)) throw new Error(`${label} must be null or a finite number > 0`);
+    return value;
+  }
+  if (["width", "height", "font_size", "line_spacing"].includes(key)) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) throw new Error(`${label} must be a finite number > 0`);
+    return value;
+  }
+  if (key === "stroke_width") {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error(`${label} must be a finite number >= 0`);
+    return value;
+  }
+  return finiteCoordinate(value, label);
+}
+
 export function cloneCardVisualLayoutOverrides(value: CardVisualLayoutOverrides): CardVisualLayoutOverrides {
   return structuredClone(value);
 }
@@ -77,15 +114,14 @@ export function parseCardVisualLayoutOverrides(value: unknown): CardVisualLayout
     }
     if (!isRecord(candidate)) throw new Error(`visual layout overrides.fields.${fieldName} must be an object`);
     const keys = Object.keys(candidate);
-    if (keys.some((key) => key !== "x" && key !== "y")) {
-      throw new Error(`visual layout overrides.fields.${fieldName} only supports x and y`);
+    if (keys.some((key) => !OVERRIDE_KEYS.includes(key as VisualOverrideKey))) {
+      throw new Error(`visual layout overrides.fields.${fieldName} contains an unsupported property`);
     }
     const patch: CardVisualLayoutFieldOverride = {};
-    if (candidate.x !== undefined) patch.x = finiteCoordinate(candidate.x, `visual layout overrides.fields.${fieldName}.x`);
-    if (candidate.y !== undefined) patch.y = finiteCoordinate(candidate.y, `visual layout overrides.fields.${fieldName}.y`);
-    if (patch.x === undefined && patch.y === undefined) {
-      throw new Error(`visual layout overrides.fields.${fieldName} must contain x or y`);
+    for (const key of keys as VisualOverrideKey[]) {
+      if (candidate[key] !== undefined) patch[key] = parseOverrideValue(key, candidate[key], `visual layout overrides.fields.${fieldName}.${key}`) as never;
     }
+    if (keys.length === 0) throw new Error(`visual layout overrides.fields.${fieldName} must contain a property`);
     fields[fieldName as CardVisualLayoutField] = patch;
   }
   return { schema_version: CARD_VISUAL_LAYOUT_OVERRIDE_SCHEMA_VERSION, fields };
@@ -98,8 +134,8 @@ export function effectiveVisualLayout(layout: CardLayout, overrides: CardVisualL
     const patch = overrides.fields[fieldName];
     effective[fieldName] = {
       ...field,
-      x: patch?.x ?? field.x,
-      y: patch?.y ?? field.y,
+      ...field,
+      ...(patch ?? {}),
       inherited_x: patch?.x === undefined,
       inherited_y: patch?.y === undefined
     };
@@ -112,7 +148,7 @@ export function applyCardVisualLayoutOverrides(layout: CardLayout, overrides: Ca
   const effective = effectiveVisualLayout(layout, overrides);
   const fields = Object.fromEntries(CARD_VISUAL_LAYOUT_FIELDS.map((fieldName) => [
     fieldName,
-    { ...layout[fieldName], x: effective[fieldName].x, y: effective[fieldName].y } satisfies CardTextFieldLayout
+    { ...layout[fieldName], ...Object.fromEntries(OVERRIDE_KEYS.map((key) => [key, effective[fieldName][key]])) } satisfies CardTextFieldLayout
   ])) as Record<CardVisualLayoutField, CardTextFieldLayout>;
   return { ...layout, ...fields };
 }
@@ -129,6 +165,21 @@ export function updateVisualLayoutCoordinate(
   if (value === undefined) delete patch[coordinate];
   else patch[coordinate] = value;
   if (patch.x === undefined && patch.y === undefined) delete fields[fieldName];
+  else fields[fieldName] = patch;
+  return { schema_version: CARD_VISUAL_LAYOUT_OVERRIDE_SCHEMA_VERSION, fields };
+}
+
+export function updateVisualLayoutProperty<K extends keyof CardVisualLayoutFieldOverride>(
+  overrides: CardVisualLayoutOverrides,
+  fieldName: CardVisualLayoutField,
+  property: K,
+  value: CardVisualLayoutFieldOverride[K] | undefined
+): CardVisualLayoutOverrides {
+  const fields = cloneCardVisualLayoutOverrides(overrides).fields;
+  const patch = { ...(fields[fieldName] ?? {}) };
+  if (value === undefined) delete patch[property];
+  else patch[property] = value;
+  if (Object.keys(patch).length === 0) delete fields[fieldName];
   else fields[fieldName] = patch;
   return { schema_version: CARD_VISUAL_LAYOUT_OVERRIDE_SCHEMA_VERSION, fields };
 }
