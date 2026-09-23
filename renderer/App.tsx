@@ -21,6 +21,8 @@ import {
   duplicateCardEffect,
   moveCardEffect,
   parseAdvancedGameMetadata,
+  replaceCardEffectType,
+  statusDefinitionsForEffectType,
   validateGameMetadataDocument
 } from "../src/game-metadata.ts";
 import type { BatchPlan, PreviewPayload, StudioCardPayload, StudioPreviewPayload } from "../src/ipc-contract.ts";
@@ -273,18 +275,6 @@ interface StudioEditorState {
 
 function cloneStudioEditorState(state: StudioEditorState): StudioEditorState {
   return structuredClone(state);
-}
-
-function replacementEffect(type: EffectType, id: string, target: TargetMode): StudioEffect {
-  switch (type) {
-    case "damage": return { id, type, target, amount: 1, hits: 1 };
-    case "splash_damage": return { id, type, target: target === "single_enemy" ? "single_enemy" : "selected", amount: 1, splash_ratio: 0.5, target_scope: "other_enemies", distribution: { mode: "adjacent" } };
-    case "heal": return { id, type, target, amount: 1 };
-    case "shield": return { id, type, target, amount: 1 };
-    case "buff": return { id, type, target, status: "status", stacks: 1, duration: 1 };
-    case "debuff": return { id, type, target, status: "status", stacks: 1, duration: 1 };
-    case "cleanse": return { id, type, target, count: 1 };
-  }
 }
 
 type ProductionScope = ProductionFilterScope;
@@ -717,8 +707,7 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
 
   const changeEffectType = (index: number, type: EffectType) => {
     if (!draft) return;
-    const effects = draft.effects.map((effect, effectIndex) => effectIndex === index ? replacementEffect(type, effect.id, effect.target) : effect);
-    acceptDraft({ ...draft, effects });
+    acceptDraft(replaceCardEffectType(draft, index, type));
   };
 
   const applyEffectOperation = (operation: () => StudioMetadata) => {
@@ -1418,7 +1407,7 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
                     {(effect.type === "damage" || effect.type === "splash_damage" || effect.type === "heal" || effect.type === "shield") && <label className="field"><span>Amount</span><input data-validation-path={`effects[${index}].amount`} disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.amount} onChange={(event) => updateEffect(index, { amount: Number(event.target.value) })} /></label>}
                     {effect.type === "splash_damage" && <><label className="field"><span>Splash Ratio</span><input data-validation-path={`effects[${index}].splash_ratio`} disabled={actionBusy !== null} type="number" step="0.05" min="0.01" max="1" value={effect.splash_ratio} onChange={(event) => updateEffect(index, { splash_ratio: Number(event.target.value) })} /><small>Derived pool ratio (0 &lt; ratio ≤ 1)</small></label><label className="field"><span>Target Scope</span><select data-validation-path={`effects[${index}].target_scope`} disabled={actionBusy !== null} value={effect.target_scope} onChange={(event) => updateEffect(index, { target_scope: event.target.value })}><option value="other_enemies">Other enemies (exclude primary)</option></select></label><label className="field"><span>Distribution Mode</span><select data-validation-path={`effects[${index}].distribution.mode`} disabled={actionBusy !== null} value={effect.distribution.mode} onChange={(event) => updateEffect(index, { distribution: { mode: event.target.value } })}><option value="adjacent">Adjacent positional</option></select></label></>}
                     {effect.type === "damage" && <label className="field"><span>Hits</span><input data-validation-path={`effects[${index}].hits`} disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.hits} onChange={(event) => updateEffect(index, { hits: Number(event.target.value) })} /></label>}
-                    {(effect.type === "buff" || effect.type === "debuff") && <><label className="field"><span>Status</span><input data-validation-path={`effects[${index}].status`} disabled={actionBusy !== null} value={effect.status} placeholder="status key" onChange={(event) => updateEffect(index, { status: event.target.value })} /></label><div className="number-fields"><label className="field"><span>Stacks</span><input data-validation-path={`effects[${index}].stacks`} disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.stacks} onChange={(event) => updateEffect(index, { stacks: Number(event.target.value) })} /></label><label className="field"><span>Duration</span><input data-validation-path={`effects[${index}].duration`} disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.duration} onChange={(event) => updateEffect(index, { duration: Number(event.target.value) })} /></label></div></>}
+                    {(effect.type === "buff" || effect.type === "debuff") && <><label className="field"><span>Status</span><select data-validation-path={`effects[${index}].status`} disabled={actionBusy !== null} value={effect.status} onChange={(event) => updateEffect(index, { status: event.target.value })}>{!statusDefinitionsForEffectType(effect.type).some((definition) => definition.id === effect.status) && <option value={effect.status}>Legacy status: {effect.status}</option>}{statusDefinitionsForEffectType(effect.type).map((definition) => <option key={definition.id} value={definition.id}>{definition.label}</option>)}</select></label><div className="number-fields"><label className="field"><span>Stacks</span><input data-validation-path={`effects[${index}].stacks`} disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.stacks} onChange={(event) => updateEffect(index, { stacks: Number(event.target.value) })} /></label><label className="field"><span>Duration</span><input data-validation-path={`effects[${index}].duration`} disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.duration} onChange={(event) => updateEffect(index, { duration: Number(event.target.value) })} /></label></div></>}
                     {effect.type === "cleanse" && <label className="field"><span>Count</span><input data-validation-path={`effects[${index}].count`} disabled={actionBusy !== null} type="number" step="1" min="1" value={effect.count} onChange={(event) => updateEffect(index, { count: Number(event.target.value) })} /></label>}
                     <div className="effect-actions"><button className="ghost" disabled={actionBusy !== null || index === 0} onClick={() => applyEffectOperation(() => moveCardEffect(draft, index, "up"))}>Move Up</button><button className="ghost" disabled={actionBusy !== null || index === draft.effects.length - 1} onClick={() => applyEffectOperation(() => moveCardEffect(draft, index, "down"))}>Move Down</button><button className="ghost" disabled={actionBusy !== null} onClick={() => applyEffectOperation(() => duplicateCardEffect(draft, index))}>Duplicate</button><button className="ghost danger" disabled={actionBusy !== null} onClick={() => applyEffectOperation(() => deleteCardEffect(draft, index))}>Delete</button></div>
                   </article>

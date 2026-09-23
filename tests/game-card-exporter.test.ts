@@ -11,6 +11,7 @@ import type { CardGameMetadata } from "../src/game-metadata.ts";
 import { card } from "./fixtures.ts";
 
 const source = () => toCatalogCard(card({ title: "Furball", slug: "furball", class: { _id: "beast", title: "Beast" }, part: { _id: "back", title: "Back" } }));
+const grandmasFanSource = () => toCatalogCard(card({ title: "Grandma's Fan", slug: "grandmas_fan", class: { _id: "beast", title: "Beast" }, part: { _id: "back", title: "Back" } }));
 const metadata: CardGameMetadata = {
   schema_version: 2,
   id: "furball",
@@ -50,6 +51,25 @@ test("exports a deterministic byte-identical original placeholder package on Win
   assert.equal(repeated.status, "skipped");
 });
 
+test("flat export preserves Grandma's Fan damage and canonical speed_down debuff", async () => {
+  const root = await mkdtemp(join(tmpdir(), "axie-game-grandmas-fan-"));
+  const grandmasFan: CardGameMetadata = {
+    ...metadata,
+    id: "grandmas_fan",
+    name: "Grandma's Fan",
+    targeting: { mode: "all_enemies" },
+    effects: [
+      { id: "damage_1", type: "damage", target: "all_enemies", amount: 30, hits: 1 },
+      { id: "debuff_1", type: "debuff", target: "all_enemies", status: "speed_down", stacks: 1, duration: 1 }
+    ]
+  };
+  const result = await exportIndividualGameCard({ card: grandmasFanSource(), metadata: grandmasFan, visualSource: "original", imageBytes: png(), exportRoot: root });
+  assert.deepEqual(result.document.effects, grandmasFan.effects);
+  assert.equal(result.document.effects[1]?.type, "debuff");
+  assert.equal((result.document.effects[1] as { status: string }).status, "speed_down");
+  const stored = validateGameCardDocument(JSON.parse(await readFile(result.metadata_path, "utf8")));
+  assert.equal((stored.effects[1] as { status: string }).status, "speed_down");
+});
 test("preflights conflicts and never overwrites a different game card", async () => {
   const root = await mkdtemp(join(tmpdir(), "axie-game-conflict-"));
   const original = png();

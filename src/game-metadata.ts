@@ -14,6 +14,45 @@ export type TargetVocabulary = (typeof TARGET_VOCABULARY)[number];
 export const EFFECT_TYPES = ["damage", "splash_damage", "heal", "shield", "buff", "debuff", "cleanse"] as const;
 export type CardEffectType = (typeof EFFECT_TYPES)[number];
 
+export type StatusEffectType = "buff" | "debuff";
+
+export interface StatusDefinition {
+  id: string;
+  label: string;
+  effectType: StatusEffectType;
+}
+
+/**
+ * Authoring vocabulary for status effects. Existing documents intentionally
+ * remain parser-compatible with legacy string identifiers; this list controls
+ * new defaults and the standard editor UI without silently migrating data.
+ */
+export const STATUS_DEFINITIONS: readonly StatusDefinition[] = [
+  { id: "attack_up", label: "Attack Up", effectType: "buff" },
+  { id: "defense_up", label: "Defense Up", effectType: "buff" },
+  { id: "speed_up", label: "Speed Up", effectType: "buff" },
+  { id: "regen", label: "Regen", effectType: "buff" },
+  { id: "attack_down", label: "Attack Down", effectType: "debuff" },
+  { id: "defense_down", label: "Defense Down", effectType: "debuff" },
+  { id: "speed_down", label: "Speed Down", effectType: "debuff" },
+  { id: "poison", label: "Poison", effectType: "debuff" },
+  { id: "bleed", label: "Bleed", effectType: "debuff" },
+  { id: "burn", label: "Burn", effectType: "debuff" }
+];
+
+export function statusDefinitionForId(id: string): StatusDefinition | null {
+  return STATUS_DEFINITIONS.find((definition) => definition.id === id) ?? null;
+}
+export function statusDefinitionsForEffectType(effectType: StatusEffectType): readonly StatusDefinition[] {
+  return STATUS_DEFINITIONS.filter((definition) => definition.effectType === effectType);
+}
+
+export function defaultStatusForEffectType(effectType: StatusEffectType): string {
+  const definition = statusDefinitionsForEffectType(effectType)[0];
+  if (!definition) throw new Error(`No status default configured for ${effectType}`);
+  return definition.id;
+}
+
 export interface CardTargeting {
   mode: TargetVocabulary;
 }
@@ -228,6 +267,19 @@ function readString(
   return candidate;
 }
 
+function readStatus(
+  effectType: StatusEffectType,
+  value: Record<string, unknown>,
+  path: string,
+  issues: GameMetadataValidationIssue[]
+): string {
+  const status = readString(value, "status", path, issues);
+  const definition = statusDefinitionForId(status);
+  if (definition && definition.effectType !== effectType) {
+    addIssue(issues, path, `Must be a valid ${effectType} status`);
+  }
+  return status;
+}
 function readNullableVisualNumber(
   value: Record<string, unknown>,
   key: "cost" | "value",
@@ -343,7 +395,7 @@ function parseEffect(value: unknown, index: number, issues: GameMetadataValidati
         id,
         type,
         target,
-        status: readString(value, "status", `${path}.status`, issues),
+        status: readStatus(type, value, `${path}.status`, issues),
         stacks: readPositiveInteger(value, "stacks", `${path}.stacks`, issues),
         duration: readPositiveInteger(value, "duration", `${path}.duration`, issues)
       };
@@ -633,8 +685,8 @@ function defaultNewEffect(type: CardEffectType, target: TargetVocabulary): NewCa
     case "splash_damage": return { type, target: target === "single_enemy" ? "single_enemy" : "selected", amount: 1, splash_ratio: 0.5, target_scope: "other_enemies", distribution: { mode: "adjacent" } };
     case "heal": return { type, target, amount: 1 };
     case "shield": return { type, target, amount: 1 };
-    case "buff": return { type, target, status: "status", stacks: 1, duration: 1 };
-    case "debuff": return { type, target, status: "status", stacks: 1, duration: 1 };
+    case "buff": return { type, target, status: defaultStatusForEffectType(type), stacks: 1, duration: 1 };
+    case "debuff": return { type, target, status: defaultStatusForEffectType(type), stacks: 1, duration: 1 };
     case "cleanse": return { type, target, count: 1 };
   }
 }
@@ -665,6 +717,26 @@ export function addCardEffect(
   return parseGameMetadataV2({ ...current, effects: [...current.effects, candidate] });
 }
 
+/**
+ * Replaces one effect with the deterministic defaults for a new discriminator.
+ * IDs and targeting are retained; changing buff/debuff therefore always picks
+ * a status compatible with the selected effect type.
+ */
+export function replaceCardEffectType(
+  metadata: CardGameMetadata,
+  effectIdOrIndex: string | number,
+  type: CardEffectType
+): CardGameMetadata {
+  const current = parseGameMetadataV2(metadata);
+  const index = effectIndex(current, effectIdOrIndex);
+  const existing = current.effects[index]!;
+  const replacement = {
+    ...defaultNewEffect(type, existing.target),
+    id: existing.id
+  } as CardEffect;
+  const effects = current.effects.map((effect, effectIndex) => effectIndex === index ? replacement : effect);
+  return parseGameMetadataV2({ ...current, effects });
+}
 export function moveCardEffect(
   metadata: CardGameMetadata,
   effectIdOrIndex: string | number,

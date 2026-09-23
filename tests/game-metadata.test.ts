@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   GAME_METADATA_SCHEMA_VERSION,
+  STATUS_DEFINITIONS,
   TARGET_VOCABULARY,
   GameMetadataValidationError,
   addCardEffect,
   deleteCardEffect,
   duplicateCardEffect,
+  defaultStatusForEffectType,
   migrateGameMetadataV1,
   moveCardEffect,
   parseAdvancedGameMetadata,
@@ -14,6 +16,8 @@ import {
   parseGameMetadata,
   parseGameMetadataV2,
   parseOrMigrateGameMetadata,
+  replaceCardEffectType,
+  statusDefinitionsForEffectType,
   validateGameMetadataForGameReady,
   validateGameMetadataDocument,
   validateGameMetadataV2,
@@ -56,6 +60,57 @@ const complete = (): CardGameMetadata => ({
   effects: effects.map((effect) => ({ ...effect }))
 });
 
+test("centralizes the current buff and debuff authoring vocabulary", () => {
+  assert.deepEqual(statusDefinitionsForEffectType("buff").map((definition) => definition.id), [
+    "attack_up", "defense_up", "speed_up", "regen"
+  ]);
+  assert.deepEqual(statusDefinitionsForEffectType("debuff").map((definition) => definition.id), [
+    "attack_down", "defense_down", "speed_down", "poison", "bleed", "burn"
+  ]);
+  assert.equal(defaultStatusForEffectType("buff"), "attack_up");
+  assert.equal(defaultStatusForEffectType("debuff"), "attack_down");
+  assert.deepEqual(STATUS_DEFINITIONS.map((definition) => definition.label), [
+    "Attack Up", "Defense Up", "Speed Up", "Regen",
+    "Attack Down", "Defense Down", "Speed Down", "Poison", "Bleed", "Burn"
+  ]);
+  const ids = STATUS_DEFINITIONS.map((definition) => definition.id);
+  for (const excluded of ["freeze", "physical_attack_up", "magical_attack_up", "physical_defense_up", "magical_defense_up", "skill_up"]) {
+    assert.ok(!ids.includes(excluded), `${excluded} must not be authorable yet`);
+  }
+});
+
+test("status defaults and effect type changes are deterministic while legacy strings remain compatible", () => {
+  const addedBuff = addCardEffect({ ...complete(), effects: [] }, "buff");
+  assert.deepEqual(addedBuff.effects[0], {
+    id: "buff_1", type: "buff", target: "single_enemy", status: "attack_up", stacks: 1, duration: 1
+  });
+  const asDebuff = replaceCardEffectType(addedBuff, 0, "debuff");
+  assert.deepEqual(asDebuff.effects[0], {
+    id: "buff_1", type: "debuff", target: "single_enemy", status: "attack_down", stacks: 1, duration: 1
+  });
+  const asBuffAgain = replaceCardEffectType(asDebuff, "buff_1", "buff");
+  assert.deepEqual(asBuffAgain.effects[0], {
+    id: "buff_1", type: "buff", target: "single_enemy", status: "attack_up", stacks: 1, duration: 1
+  });
+
+  const legacy = complete();
+  legacy.effects = [
+    { id: "buff_legacy", type: "buff", target: "self", status: "morale_up", stacks: 1, duration: 1 },
+    { id: "debuff_legacy", type: "debuff", target: "single_enemy", status: "slow", stacks: 1, duration: 1 }
+  ];
+  assert.equal(validateGameMetadataV2(legacy).status, "valid");
+  const advancedLegacy = parseAdvancedGameMetadataJson(JSON.stringify(legacy), complete());
+  assert.equal(advancedLegacy.accepted, true);
+  assert.equal((advancedLegacy.metadata?.effects[1] as { status: string } | undefined)?.status, "slow");
+  const canonical = { ...complete(), effects: [{ id: "speed_down_1", type: "debuff" as const, target: "all_enemies" as const, status: "speed_down", stacks: 1, duration: 1 }] };
+  assert.equal(validateGameMetadataV2(canonical).status, "valid");
+  const incompatibleCanonical = validateGameMetadataV2({
+    ...canonical,
+    effects: [{ id: "wrong_status_1", type: "buff", target: "self", status: "speed_down", stacks: 1, duration: 1 }]
+  });
+  assert.equal(incompatibleCanonical.status, "invalid");
+  assert.ok(incompatibleCanonical.issues.some((issue) => issue.path === "effects[0].status" && issue.message === "Must be a valid buff status"));
+});
 test("accepts schema V2, every target and every discriminated effect without sharing nested state", () => {
   assert.deepEqual(TARGET_VOCABULARY, [
     "self",
@@ -290,7 +345,7 @@ test("effect helpers preserve order, immutability and deterministic unique ids",
     id: "buff_1",
     type: "buff",
     target: "single_enemy",
-    status: "status",
+    status: "attack_up",
     stacks: 1,
     duration: 1
   }]);
