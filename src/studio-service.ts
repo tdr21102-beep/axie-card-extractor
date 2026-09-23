@@ -19,6 +19,7 @@ import {
 import {
   applyCardVisualLayoutOverrides,
   effectiveVisualLayout,
+  visualLayoutRenderingContext,
   type CardVisualLayoutOverrides
 } from "./card-layout-overrides.ts";
 import { assertGameMetadataGameReady, parseGameMetadata } from "./game-metadata.ts";
@@ -73,7 +74,8 @@ export function createCardStudioService(options: CardStudioServiceOptions) {
       metadataMigrated: stored.migrated,
       clean,
       visualLayoutOverrides,
-      effectiveVisualLayout: effectiveVisualLayout(layout, visualLayoutOverrides)
+      effectiveVisualLayout: effectiveVisualLayout(layout, visualLayoutOverrides),
+      visualLayoutRendering: visualLayoutRenderingContext(layout)
     };
   };
 
@@ -114,7 +116,7 @@ export function createCardStudioService(options: CardStudioServiceOptions) {
     const overrides = visualLayoutOverrides ?? await loadCardVisualLayoutOverrides(card, options.root);
     const resolvedLayout = applyCardVisualLayoutOverrides(layout, overrides);
     const result = await renderCard(cleanBytes, validated, resolvedLayout);
-    return { ...result, cleanSha256: clean.sha256, effectiveVisualLayout: effectiveVisualLayout(layout, overrides) };
+    return { ...result, cleanSha256: clean.sha256, effectiveVisualLayout: effectiveVisualLayout(layout, overrides), visualLayoutRendering: visualLayoutRenderingContext(layout) };
   };
 
   const exportRendered = async (card: CatalogCard, metadata: CardGameMetadata, visualLayoutOverrides?: CardVisualLayoutOverrides) => {

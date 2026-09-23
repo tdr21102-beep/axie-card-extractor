@@ -16,14 +16,28 @@ export interface CardVisualLayoutOverrides {
   fields: Partial<Record<CardVisualLayoutField, CardVisualLayoutFieldOverride>>;
 }
 
-export interface EffectiveVisualLayoutField {
-  x: number;
-  y: number;
+export interface EffectiveVisualLayoutField extends CardTextFieldLayout {
+  /** Sparse per-card patches currently affect only these coordinates. */
   inherited_x: boolean;
   inherited_y: boolean;
 }
 
+/** Renderer-level layout data required by the editor to faithfully mirror text. */
+export interface VisualLayoutRenderingContext {
+  default_font_family: string;
+  font_asset: string | null;
+  card_type_display: Record<string, string>;
+}
+
 export type EffectiveVisualLayout = Record<CardVisualLayoutField, EffectiveVisualLayoutField>;
+
+export function visualLayoutRenderingContext(layout: CardLayout): VisualLayoutRenderingContext {
+  return {
+    default_font_family: layout.default_font_family,
+    font_asset: layout.font_asset,
+    card_type_display: { ...layout.card_type_display }
+  };
+}
 
 export const EMPTY_CARD_VISUAL_LAYOUT_OVERRIDES: CardVisualLayoutOverrides = {
   schema_version: CARD_VISUAL_LAYOUT_OVERRIDE_SCHEMA_VERSION,
@@ -83,6 +97,7 @@ export function effectiveVisualLayout(layout: CardLayout, overrides: CardVisualL
     const field = layout[fieldName];
     const patch = overrides.fields[fieldName];
     effective[fieldName] = {
+      ...field,
       x: patch?.x ?? field.x,
       y: patch?.y ?? field.y,
       inherited_x: patch?.x === undefined,
@@ -125,6 +140,22 @@ export function resetVisualLayoutElement(
   const fields = cloneCardVisualLayoutOverrides(overrides).fields;
   delete fields[fieldName];
   return { schema_version: CARD_VISUAL_LAYOUT_OVERRIDE_SCHEMA_VERSION, fields };
+}
+
+/**
+ * Resets only the movable position. Today x/y are the complete sparse patch,
+ * but composing coordinate resets keeps future visual properties intact.
+ */
+export function resetVisualLayoutPosition(
+  overrides: CardVisualLayoutOverrides,
+  fieldName: CardVisualLayoutField
+): CardVisualLayoutOverrides {
+  return updateVisualLayoutCoordinate(
+    updateVisualLayoutCoordinate(overrides, fieldName, "x", undefined),
+    fieldName,
+    "y",
+    undefined
+  );
 }
 
 export function nudgeVisualLayoutCoordinate(
