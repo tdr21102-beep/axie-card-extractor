@@ -15,13 +15,14 @@ Files below `cards/data/<class>/<card_id>.json` use `schema_version: 2`:
   "part": "back",
   "cost": 1,
   "value": 40,
-  "card_type": "attack",
+  "card_type": "physical_attack",
   "description": "Deal 2 hits.",
   "targeting": { "mode": "single_enemy" },
   "effects": [
     {
       "id": "damage_1",
       "type": "damage",
+      "damage_type": "physical",
       "target": "selected",
       "amount": 20,
       "hits": 2
@@ -40,7 +41,7 @@ The imported `cards/clean/<class>/<card_id>.png` is a byte-preserving **Clean Ba
 
 - `id`, `class`, and `part` are derived from immutable source-catalog identity and must match that source card.
 - `name`, `cost`, `value`, `card_type`, and `description` are editable visual/game metadata used by the deterministic renderer.
-- `card_type` is an extensible string. `attack`, `skill`, `secret`, and `power` are configured initial suggestions, not a closed gameplay enum.
+- New Card Studio authoring uses the closed Card Type V2 vocabulary: `physical_attack`, `magical_attack`, `heal`, `shield`, `status`, and `utility`. Legacy `attack`, `skill`, `secret`, and `power` values remain readable and are preserved without heuristic migration, but are not new authoring options.
 
 ### Targeting vocabulary
 
@@ -50,8 +51,8 @@ The initial vocabulary is `self`, `selected`, `single_enemy`, `single_ally`, `al
 
 Every effect has a unique stable `id`, a discriminating `type`, a `target`, and only its type-specific fields:
 
-- `damage`: positive integer `amount` and integer `hits >= 1`.
-- `splash_damage`: positive integer primary `amount`, individual enemy `target` (`selected` or `single_enemy`), `splash_ratio` in the finite range `0 < ratio <= 1`, `target_scope: "other_enemies"`, and `distribution: { "mode": "adjacent" }`. The card's `targeting.mode` must also be individual (`selected` or `single_enemy`). The primary target receives `amount`; each eligible enemy adjacent to that primary target is described by the ratio of the primary amount. The game resolves enemy positions, damage rounding, and combat modifiers; Card Studio only validates and exports this declarative policy. Future distribution modes require an explicit schema/validator extension.
+- `damage`: `damage_type` (`physical` or `magical`), positive integer `amount`, and integer `hits >= 1`. New effects default to `physical`; legacy effects may omit `damage_type` and remain readable until explicitly edited. Card Type never infers Damage Type.
+- `splash_damage`: the same optional legacy-compatible `damage_type` field, positive integer primary `amount`, individual enemy `target` (`selected` or `single_enemy`), `splash_ratio` in the finite range `0 < ratio <= 1`, `target_scope: "other_enemies"`, and `distribution: { "mode": "adjacent" }`. The card's `targeting.mode` must also be individual (`selected` or `single_enemy`). The primary target receives `amount`; each eligible enemy adjacent to that primary target is described by the ratio of the primary amount. The game resolves enemy positions, damage rounding, and combat modifiers; Card Studio only validates and exports this declarative policy. Future distribution modes require an explicit schema/validator extension.
 - `heal`: positive integer `amount`.
 - `shield`: positive integer `amount`.
 - `buff`: non-empty `status`, integer `stacks >= 1`, integer `duration >= 1`.

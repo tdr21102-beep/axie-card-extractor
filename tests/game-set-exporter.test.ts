@@ -115,6 +115,21 @@ test("every batch execution gets a conflict-safe report without overwriting prio
   assert.equal(await readFile(join(directory, "report.json"), "utf8"), "user-owned report\n");
 });
 
+test("batch game set export preserves Card Type V2 and Damage Type V1", async () => {
+  const root = await mkdtemp(join(tmpdir(), "axie-game-set-card-types-"));
+  const result = await run(root, {
+    metadataFor: (catalogCard) => ({
+      ...defaultGameMetadata(catalogCard),
+      card_type: "magical_attack",
+      effects: [{ id: "damage_1", type: "damage", damage_type: "magical", target: "single_enemy", amount: 60, hits: 1 }]
+    })
+  });
+  const entry = result.manifest.cards[0]!;
+  const exported = JSON.parse(await readFile(join(result.directory, ...entry.card_json.split("/")), "utf8")) as { card_type: string; effects: Array<{ damage_type?: string }> };
+  assert.equal(exported.card_type, "magical_attack");
+  assert.equal(exported.effects[0]?.damage_type, "magical");
+});
+
 test("a conflicting manifest writes a new report but never publishes a newly-ready orphan package", async () => {
   const root = await mkdtemp(join(tmpdir(), "axie-game-set-manifest-snapshot-"));
   const data = fixture();

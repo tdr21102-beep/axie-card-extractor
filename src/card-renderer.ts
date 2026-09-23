@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { createCanvas, GlobalFonts, loadImage, type SKRSContext2D } from "@napi-rs/canvas";
 import type { CardLayout, CardTextFieldLayout } from "./card-layout.ts";
 import type { CardGameMetadata } from "./card-studio.ts";
+import { cardTypeLabel } from "./card-type-definitions.ts";
 
 export interface RenderedCard {
   bytes: Uint8Array;
@@ -188,7 +189,7 @@ function renderMetadata(context: SKRSContext2D, metadata: CardGameMetadata, layo
     drawField(context, metadata.cost === null ? "" : String(metadata.cost), layout.cost, fontFamily, "cost"),
     drawField(context, metadata.value === null ? "" : String(metadata.value), layout.value, fontFamily, "value"),
     drawField(context, metadata.name, layout.name, fontFamily, "name"),
-    drawField(context, layout.card_type_display[metadata.card_type.trim().toLowerCase()] ?? metadata.card_type, layout.card_type, fontFamily, "card_type"),
+    drawField(context, layout.card_type_display[metadata.card_type.trim().toLowerCase()] ?? cardTypeLabel(metadata.card_type.trim().toLowerCase()) ?? metadata.card_type, layout.card_type, fontFamily, "card_type"),
     drawField(context, metadata.description, layout.description, fontFamily, "description")
   ];
   return warnings.filter((warning): warning is string => warning !== null);

@@ -5,8 +5,12 @@ import { loadCardTypeConfig, parseCardTypeConfig } from "../src/card-type-config
 test("loads versioned extensible card type visuals without requiring icons", () => {
   const config = loadCardTypeConfig();
   assert.equal(config.version, 1);
-  assert.deepEqual(Object.keys(config.types), ["attack", "skill", "secret", "power"]);
-  assert.equal(config.types.attack?.icon_reference, null);
+  assert.deepEqual(Object.keys(config.types), [
+    "physical_attack", "magical_attack", "heal", "shield", "status", "utility",
+    "attack", "skill", "secret", "power"
+  ]);
+  assert.equal(config.types.physical_attack?.label, "Physical Attack");
+  assert.equal(config.types.attack?.label, "Attack (legacy)");
 });
 
 test("rejects unsafe icon references while allowing future card type keys", () => {

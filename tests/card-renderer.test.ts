@@ -43,6 +43,8 @@ test("loads and validates the versioned card layout", async () => {
   assert.equal(layout.description.max_lines, 4);
   assert.equal(layout.description.vertical_alignment, "top");
   assert.equal(layout.card_type_display.attack, "Attack");
+  assert.equal(layout.card_type_display.physical_attack, "Physical Attack");
+  assert.equal(layout.card_type_display.magical_attack, "Magical Attack");
 
   const directory = await mkdtemp(join(tmpdir(), "axie-card-layout-"));
   const invalidPath = join(directory, "invalid.json");

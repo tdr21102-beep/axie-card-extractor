@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+export { CARD_TYPE_DEFINITIONS, LEGACY_CARD_TYPE_DEFINITIONS, cardTypeLabel, isCanonicalCardType } from "./card-type-definitions.ts";
+export type { CanonicalCardType } from "./card-type-definitions.ts";
 
 export const CARD_TYPE_CONFIG_VERSION = 1 as const;
 

@@ -1,23 +1,53 @@
 {
   "version": 1,
   "types": {
+    "physical_attack": {
+      "label": "Physical Attack",
+      "icon_reference": null,
+      "style_key": "physical_attack"
+    },
+    "magical_attack": {
+      "label": "Magical Attack",
+      "icon_reference": null,
+      "style_key": "magical_attack"
+    },
+    "heal": {
+      "label": "Heal",
+      "icon_reference": null,
+      "style_key": "heal"
+    },
+    "shield": {
+      "label": "Shield",
+      "icon_reference": null,
+      "style_key": "shield"
+    },
+    "status": {
+      "label": "Status",
+      "icon_reference": null,
+      "style_key": "status"
+    },
+    "utility": {
+      "label": "Utility",
+      "icon_reference": null,
+      "style_key": "utility"
+    },
     "attack": {
-      "label": "Attack",
+      "label": "Attack (legacy)",
       "icon_reference": null,
       "style_key": "attack"
     },
     "skill": {
-      "label": "Skill",
+      "label": "Skill (legacy)",
       "icon_reference": null,
       "style_key": "skill"
     },
     "secret": {
-      "label": "Secret",
+      "label": "Secret (legacy)",
       "icon_reference": null,
       "style_key": "secret"
     },
     "power": {
-      "label": "Power",
+      "label": "Power (legacy)",
       "icon_reference": null,
       "style_key": "power"
     }

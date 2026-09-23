@@ -25,6 +25,7 @@ import {
   type CardGameMetadata,
   type CardGameMetadataV1
 } from "../src/game-metadata.ts";
+import { CARD_TYPE_DEFINITIONS, cardTypeLabel } from "../src/card-type-definitions.ts";
 
 const v1: CardGameMetadataV1 = {
   id: "furball",
@@ -111,6 +112,52 @@ test("status defaults and effect type changes are deterministic while legacy str
   });
   assert.equal(incompatibleCanonical.status, "invalid");
   assert.ok(incompatibleCanonical.issues.some((issue) => issue.path === "effects[0].status" && issue.message === "Must be a valid buff status"));
+});
+
+test("Card Type V2 keeps canonical authoring separate from legacy values", () => {
+  assert.deepEqual(CARD_TYPE_DEFINITIONS.map((definition) => definition.id), [
+    "physical_attack", "magical_attack", "heal", "shield", "status", "utility"
+  ]);
+  assert.deepEqual(CARD_TYPE_DEFINITIONS.map((definition) => definition.label), [
+    "Physical Attack", "Magical Attack", "Heal", "Shield", "Status", "Utility"
+  ]);
+  for (const legacy of ["attack", "skill", "secret", "power"]) {
+    assert.equal(CARD_TYPE_DEFINITIONS.some((definition) => definition.id === legacy), false);
+    assert.ok(cardTypeLabel(legacy));
+  }
+  assert.equal(cardTypeLabel("physical_attack"), "Physical Attack");
+  assert.equal(cardTypeLabel("magical_attack"), "Magical Attack");
+  assert.equal(cardTypeLabel("heal"), "Heal");
+  assert.equal(cardTypeLabel("shield"), "Shield");
+  assert.equal(cardTypeLabel("status"), "Status");
+  assert.equal(cardTypeLabel("utility"), "Utility");
+});
+
+test("Damage Type V1 is explicit, defaults only for new effects, and round-trips legacy damage", () => {
+  const withPhysical = addCardEffect({ ...complete(), effects: [] }, "damage");
+  assert.equal(withPhysical.effects[0]?.type, "damage");
+  assert.equal((withPhysical.effects[0] as { damage_type?: string }).damage_type, "physical");
+
+  const withMagical = {
+    ...complete(),
+    card_type: "magical_attack",
+    effects: [{ id: "damage_1", type: "damage" as const, target: "single_enemy" as const, damage_type: "magical" as const, amount: 60, hits: 1 }]
+  };
+  assert.equal(validateGameMetadataV2(withMagical).status, "valid");
+  const mixed = { ...withMagical, card_type: "magical_attack", effects: [{ ...withMagical.effects[0], damage_type: "physical" as const }] };
+  assert.equal(validateGameMetadataV2(mixed).status, "valid");
+  assert.equal(mixed.effects[0].amount, 60);
+  const { damage_type: _missingDamageType, ...legacyDamageEffect } = withMagical.effects[0]!;
+  const missingForNewCard = { ...withMagical, effects: [{ ...legacyDamageEffect }] };
+  const readiness = validateGameMetadataForGameReady(missingForNewCard);
+  assert.equal(readiness.status, "invalid");
+  assert.ok(readiness.issues.some((issue) => issue.path === "effects[0].damage_type"));
+
+  const legacy = { ...complete(), card_type: "attack", effects: [{ id: "damage_legacy", type: "damage" as const, target: "single_enemy" as const, amount: 70, hits: 1 }] };
+  const parsed = parseAdvancedGameMetadataJson(JSON.stringify(legacy), complete());
+  assert.equal(parsed.accepted, true);
+  assert.equal((parsed.metadata?.effects[0] as { damage_type?: string } | undefined)?.damage_type, undefined);
+  assert.equal(parsed.metadata?.card_type, "attack");
 });
 test("accepts schema V2, every target and every discriminated effect without sharing nested state", () => {
   assert.deepEqual(TARGET_VOCABULARY, [
@@ -272,7 +319,7 @@ test("splash damage keeps one primary target and explicit adjacent-enemy distrib
   assert.notEqual(duplicated.effects[1], duplicated.effects[0]);
   assert.notEqual((duplicated.effects[1] as typeof splash).distribution, (duplicated.effects[0] as typeof splash).distribution);
   assert.deepEqual(addCardEffect({ ...complete(), effects: [] }, "splash_damage").effects[0], {
-    ...splash, target: "single_enemy", amount: 1, splash_ratio: 0.5
+    ...splash, target: "single_enemy", damage_type: "physical", amount: 1, splash_ratio: 0.5
   });
   assert.equal(validateGameMetadataV2({ ...complete(), effects: [
     { id: "damage_1", type: "damage", target: "all_enemies", amount: 20, hits: 2 },

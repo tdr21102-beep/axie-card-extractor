@@ -90,6 +90,12 @@
     "max_width": null
   },
   "card_type_display": {
+    "physical_attack": "Physical Attack",
+    "magical_attack": "Magical Attack",
+    "heal": "Heal",
+    "shield": "Shield",
+    "status": "Status",
+    "utility": "Utility",
     "attack": "Attack",
     "skill": "Skill",
     "secret": "Secret",

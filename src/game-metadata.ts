@@ -83,6 +83,8 @@ interface CardEffectBase {
 
 export interface DamageEffect extends CardEffectBase {
   type: "damage";
+  /** Omitted only for readable legacy documents; new effects always set it. */
+  damage_type?: "physical" | "magical";
   amount: number;
   hits: number;
 }
@@ -90,6 +92,8 @@ export interface DamageEffect extends CardEffectBase {
 export interface SplashDamageEffect extends CardEffectBase {
   type: "splash_damage";
   target: "selected" | "single_enemy";
+  /** Omitted only for readable legacy documents; new effects always set it. */
+  damage_type?: "physical" | "magical";
   amount: number;
   splash_ratio: number;
   target_scope: "other_enemies";
@@ -228,8 +232,8 @@ const TOP_LEVEL_KEYS = new Set([
   "effects"
 ]);
 const EFFECT_KEYS: Record<CardEffectType, ReadonlySet<string>> = {
-  damage: new Set(["id", "type", "target", "amount", "hits"]),
-  splash_damage: new Set(["id", "type", "target", "amount", "splash_ratio", "target_scope", "distribution"]),
+  damage: new Set(["id", "type", "target", "damage_type", "amount", "hits"]),
+  splash_damage: new Set(["id", "type", "target", "damage_type", "amount", "splash_ratio", "target_scope", "distribution"]),
   heal: new Set(["id", "type", "target", "amount"]),
   shield: new Set(["id", "type", "target", "amount"]),
   buff: new Set(["id", "type", "target", "status", "stacks", "duration"]),
@@ -329,6 +333,15 @@ function readPositiveInteger(
   return candidate;
 }
 
+function readDamageType(value: Record<string, unknown>, path: string, issues: GameMetadataValidationIssue[]): DamageEffect["damage_type"] {
+  if (value.damage_type === undefined) return undefined;
+  if (value.damage_type !== "physical" && value.damage_type !== "magical") {
+    addIssue(issues, path, "Must be physical or magical");
+    return undefined;
+  }
+  return value.damage_type;
+}
+
 function readTarget(value: unknown, path: string, issues: GameMetadataValidationIssue[]): TargetVocabulary {
   if (typeof value !== "string" || !TARGETS.has(value)) {
     addIssue(issues, path, `Must be one of: ${TARGET_VOCABULARY.join(", ")}`);
@@ -384,6 +397,7 @@ function parseEffect(value: unknown, index: number, issues: GameMetadataValidati
         id,
         type,
         target,
+        ...(value.damage_type === undefined ? {} : { damage_type: readDamageType(value, `${path}.damage_type`, issues) }),
         amount: readPositiveInteger(value, "amount", `${path}.amount`, issues),
         hits: readPositiveInteger(value, "hits", `${path}.hits`, issues)
       };
@@ -398,6 +412,7 @@ function parseEffect(value: unknown, index: number, issues: GameMetadataValidati
         id,
         type,
         target: target === "single_enemy" ? "single_enemy" : "selected",
+        ...(value.damage_type === undefined ? {} : { damage_type: readDamageType(value, `${path}.damage_type`, issues) }),
         amount: readPositiveInteger(value, "amount", `${path}.amount`, issues),
         splash_ratio: readSplashRatio(value.splash_ratio, `${path}.splash_ratio`, issues),
         target_scope: "other_enemies",
@@ -438,12 +453,21 @@ export function cloneGameMetadata(metadata: CardGameMetadata): CardGameMetadata 
 
 export function gameMetadataReadinessIssues(metadata: CardGameMetadata): GameMetadataValidationIssue[] {
   const requirement = CARD_TYPE_GAMEPLAY_REQUIREMENTS[metadata.card_type.trim().toLowerCase()];
-  if (!requirement || metadata.effects.length >= requirement.minEffects) return [];
-  return [{
+  const issues: GameMetadataValidationIssue[] = [];
+  if (requirement && metadata.effects.length < requirement.minEffects) issues.push({
     path: "effects",
     message: "Attack card requires at least one gameplay effect.",
     severity: "error"
-  }];
+  });
+  const canonicalCardType = ["physical_attack", "magical_attack", "heal", "shield", "status", "utility"].includes(metadata.card_type.trim().toLowerCase());
+  if (canonicalCardType) {
+    metadata.effects.forEach((effect, index) => {
+      if ((effect.type === "damage" || effect.type === "splash_damage") && !effect.damage_type) {
+        issues.push({ path: `effects[${index}].damage_type`, message: "New damage effects require an explicit damage type.", severity: "error" });
+      }
+    });
+  }
+  return issues;
 }
 
 /**
@@ -699,8 +723,8 @@ function requireEffectIndex(metadata: CardGameMetadata, effectId: string): numbe
 
 function defaultNewEffect(type: CardEffectType, target: TargetVocabulary): NewCardEffect {
   switch (type) {
-    case "damage": return { type, target, amount: 1, hits: 1 };
-    case "splash_damage": return { type, target: target === "single_enemy" ? "single_enemy" : "selected", amount: 1, splash_ratio: 0.5, target_scope: "other_enemies", distribution: { mode: "adjacent" } };
+    case "damage": return { type, target, damage_type: "physical", amount: 1, hits: 1 };
+    case "splash_damage": return { type, target: target === "single_enemy" ? "single_enemy" : "selected", damage_type: "physical", amount: 1, splash_ratio: 0.5, target_scope: "other_enemies", distribution: { mode: "adjacent" } };
     case "heal": return { type, target, amount: 1 };
     case "shield": return { type, target, amount: 1 };
     case "buff": return { type, target, status: defaultStatusForEffectType(type), stacks: 1, duration: 1 };

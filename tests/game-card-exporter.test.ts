@@ -70,6 +70,22 @@ test("flat export preserves Grandma's Fan damage and canonical speed_down debuff
   const stored = validateGameCardDocument(JSON.parse(await readFile(result.metadata_path, "utf8")));
   assert.equal((stored.effects[1] as { status: string }).status, "speed_down");
 });
+
+test("game export preserves Card Type V2 and Damage Type V1 exactly", async () => {
+  const root = await mkdtemp(join(tmpdir(), "axie-game-type-v2-"));
+  const typed: CardGameMetadata = {
+    ...metadata,
+    card_type: "magical_attack",
+    effects: [{ id: "damage_1", type: "damage", damage_type: "magical", target: "single_enemy", amount: 60, hits: 1 }]
+  };
+  const result = await exportIndividualGameCard({ card: source(), metadata: typed, visualSource: "original", imageBytes: png(), exportRoot: root });
+  assert.equal(result.document.card_type, "magical_attack");
+  assert.equal((result.document.effects[0] as { damage_type: string }).damage_type, "magical");
+  const stored = validateGameCardDocument(JSON.parse(await readFile(result.metadata_path, "utf8")));
+  assert.equal(stored.card_type, "magical_attack");
+  assert.equal((stored.effects[0] as { damage_type: string }).damage_type, "magical");
+});
+
 test("preflights conflicts and never overwrites a different game card", async () => {
   const root = await mkdtemp(join(tmpdir(), "axie-game-conflict-"));
   const original = png();
