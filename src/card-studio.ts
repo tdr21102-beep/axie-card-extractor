@@ -3,14 +3,16 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { loadImage } from "@napi-rs/canvas";
 import type { CatalogCard } from "./catalog.ts";
+import { cardIdentity } from "./card-identity.ts";
 import { sha256 } from "./downloader.ts";
-import { classDirectory, snakeCase } from "./naming.ts";
+import { classDirectory } from "./naming.ts";
 import { GAME_METADATA_SCHEMA_VERSION, parseGameMetadata, type CardGameMetadata } from "./game-metadata.ts";
 import {
   EMPTY_CARD_VISUAL_LAYOUT_OVERRIDES,
   parseCardVisualLayoutOverrides,
   type CardVisualLayoutOverrides
 } from "./card-layout-overrides.ts";
+import { pngBytesForDecode } from "./png-compat.ts";
 export type { CardGameMetadata } from "./game-metadata.ts";
 
 export interface CleanAssetState {
@@ -87,14 +89,12 @@ function classifyCleanBase(width: number, height: number): "master" | "legacy" {
   return width === 1024 && height === 1536 ? "master" : "legacy";
 }
 
-function localIdentity(card: CatalogCard): Pick<CardGameMetadata, "id" | "class" | "part"> {
-  const id = snakeCase(card.local_name);
-  if (!id) throw new Error("Card has no valid local name");
-  return {
-    id,
-    class: classDirectory(card.class),
-    part: card.part ? snakeCase(card.part) : "unknown"
-  };
+function localIdentity(card: CatalogCard): Pick<CardGameMetadata, "id" | "class" | "part" | "card_origin" | "equipment_slot"> {
+  const identity = cardIdentity(card);
+  if (identity.origin === "equipment") {
+    return { id: identity.id, card_origin: "equipment", equipment_slot: identity.equipmentSlot! };
+  }
+  return { id: identity.id, class: classDirectory(card.class), part: card.part ? identity.part : "unknown" };
 }
 
 export function defaultGameMetadata(card: CatalogCard): CardGameMetadata {
@@ -117,19 +117,26 @@ export function validateGameMetadata(value: unknown): CardGameMetadata {
 
 export function assertMetadataIdentity(metadata: CardGameMetadata, card: CatalogCard): void {
   const expected = localIdentity(card);
-  if (metadata.id !== expected.id || metadata.class !== expected.class || metadata.part !== expected.part) {
+  if (
+    metadata.id !== expected.id ||
+    (metadata.card_origin ?? "part") !== (expected.card_origin ?? "part") ||
+    metadata.class !== expected.class ||
+    metadata.part !== expected.part ||
+    metadata.equipment_slot !== expected.equipment_slot
+  ) {
     throw new Error("Game metadata identity does not match the source card");
   }
 }
 
 export function cardStudioPaths(card: CatalogCard, root = "."): CardStudioPaths {
-  const identity = localIdentity(card);
+  const identity = cardIdentity(card);
   const base = resolve(root, "cards");
+  const directory = identity.pathSegments.slice(0, -1);
   return {
-    clean: resolve(base, "clean", identity.class, `${identity.id}.png`),
-    data: resolve(base, "data", identity.class, `${identity.id}.json`),
-    visualLayout: resolve(base, "layouts", identity.class, `${identity.id}.json`),
-    rendered: resolve(base, "rendered", identity.class, `${identity.id}.png`)
+    clean: resolve(base, "clean", ...directory, `${identity.id}.png`),
+    data: resolve(base, "data", ...directory, `${identity.id}.json`),
+    visualLayout: resolve(base, "layouts", ...directory, `${identity.id}.json`),
+    rendered: resolve(base, "rendered", ...directory, `${identity.id}.png`)
   };
 }
 
@@ -227,7 +234,7 @@ export async function assertValidPng(bytes: Uint8Array): Promise<void> {
   }
   assertPngStructure(bytes);
   try {
-    const image = await loadImage(Buffer.from(bytes));
+    const image = await loadImage(Buffer.from(pngBytesForDecode(bytes)));
     if (image.width < 1 || image.height < 1) throw new Error("PNG has invalid dimensions");
   } catch {
     throw new Error("Clean base is not a decodable PNG");

@@ -153,7 +153,7 @@ function CatalogTab({ cards, catalogCache, exportRoot, onChooseFolder }: {
           {filtered.map((card) => (
             <button key={card.id} className={`card-row ${selected?.id === card.id ? "selected" : ""}`} onClick={() => setSelected(card)}>
               <span className="card-name">{card.name}</span>
-              <span className="card-traits">{card.class ?? "Unknown"} <b>•</b> {card.part ?? "Unknown"}</span>
+              <span className="card-traits">{card.card_origin === "equipment" ? `Equipment · ${card.equipment_slot ?? "Unknown slot"}` : `${card.class ?? "Unknown"} • ${card.part ?? "Unknown"}`}</span>
               <code>{card.local_name}</code>
             </button>
           ))}
@@ -337,6 +337,8 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
   const [scope, setScope] = useState<ProductionScope>("all");
   const [classFilter, setClassFilter] = useState<string | null>(null);
   const [partFilter, setPartFilter] = useState<string | null>(null);
+  const [originFilter, setOriginFilter] = useState<"part" | "equipment" | null>(null);
+  const [equipmentSlotFilter, setEquipmentSlotFilter] = useState<"weapon" | "shield" | "helmet" | "boots" | null>(null);
   const [statusFilter, setStatusFilter] = useState<ProductionStatus | null>(null);
   const [hasEffectsFilter, setHasEffectsFilter] = useState(false);
   const [hasCleanFilter, setHasCleanFilter] = useState(false);
@@ -397,11 +399,13 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
     slotCardIds: currentSlot?.cards ?? [],
     className: classFilter,
     part: partFilter,
+    cardOrigin: originFilter,
+    equipmentSlot: equipmentSlotFilter,
     status: statusFilter,
     hasEffects: hasEffectsFilter,
     hasClean: hasCleanFilter,
     gameReady: gameReadyFilter
-  }), [cards, classFilter, currentSet, currentSlot, gameReadyFilter, hasCleanFilter, hasEffectsFilter, partFilter, productionByCard, scope, search, statusFilter]);
+  }), [cards, classFilter, currentSet, currentSlot, equipmentSlotFilter, gameReadyFilter, hasCleanFilter, hasEffectsFilter, originFilter, partFilter, productionByCard, scope, search, statusFilter]);
   const hasUnsavedChanges = useMemo(
     () => Boolean(editorState && saved && (JSON.stringify(editorState) !== JSON.stringify(saved) || advancedText !== JSON.stringify(draft, null, 2))),
     [advancedText, draft, editorState, saved]
@@ -1393,9 +1397,13 @@ function StudioTab({ cards, exportRoot, onChooseFolder, onDirtyChange }: {
             <SelectFilter label="Class" value={classFilter} options={CLASSES} allLabel="All" onChange={setClassFilter} />
             <SelectFilter label="Part" value={partFilter} options={PARTS} allLabel="All" onChange={setPartFilter} />
           </div>
+          <div className="filter-pair">
+            <label className="field compact-field"><span>Origin</span><select value={originFilter ?? ""} onChange={(event) => setOriginFilter((event.target.value || null) as "part" | "equipment" | null)}><option value="">All</option><option value="part">Part</option><option value="equipment">Equipment</option></select></label>
+            <label className="field compact-field"><span>Equipment Slot</span><select value={equipmentSlotFilter ?? ""} onChange={(event) => setEquipmentSlotFilter((event.target.value || null) as "weapon" | "shield" | "helmet" | "boots" | null)}><option value="">All</option><option value="weapon">Weapon</option><option value="shield">Shield</option><option value="helmet">Helmet</option><option value="boots">Boots</option></select></label>
+          </div>
           <label className="field compact-field"><span>Status</span><select value={statusFilter ?? ""} onChange={(event) => setStatusFilter((event.target.value || null) as ProductionStatus | null)}><option value="">All</option><option>UNCONFIGURED</option><option>DRAFT</option><option>VALID</option><option>GAME_READY</option></select></label>
           <div className="filter-checks"><label><input type="checkbox" checked={hasEffectsFilter} onChange={(event) => setHasEffectsFilter(event.target.checked)} /> Effects</label><label><input type="checkbox" checked={hasCleanFilter} onChange={(event) => setHasCleanFilter(event.target.checked)} /> Clean</label><label><input type="checkbox" checked={gameReadyFilter} onChange={(event) => setGameReadyFilter(event.target.checked)} /> Game Ready</label></div>
-          <button className="ghost clear-production-filters" onClick={() => { setSearch(""); setClassFilter(null); setPartFilter(null); setStatusFilter(null); setHasEffectsFilter(false); setHasCleanFilter(false); setGameReadyFilter(false); }}>Clear filters</button>
+          <button className="ghost clear-production-filters" onClick={() => { setSearch(""); setClassFilter(null); setPartFilter(null); setOriginFilter(null); setEquipmentSlotFilter(null); setStatusFilter(null); setHasEffectsFilter(false); setHasCleanFilter(false); setGameReadyFilter(false); }}>Clear filters</button>
         </div>
         <div className="studio-card-list">
           {filtered.map((card) => {

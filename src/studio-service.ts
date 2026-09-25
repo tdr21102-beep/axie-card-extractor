@@ -30,6 +30,7 @@ export interface CardStudioServiceOptions {
   root: string;
   layoutPath: string;
   imageCache?: string;
+  assetRoot?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -144,6 +145,7 @@ export function createCardStudioService(options: CardStudioServiceOptions) {
     if (visualSource === "original") {
       imageBytes = (await acquireCardImage(card, {
         cacheDir: options.imageCache,
+        assetRoot: options.assetRoot,
         fetchImpl: options.fetchImpl
       })).bytes;
     } else if (visualSource === "rendered") {

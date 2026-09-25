@@ -50,6 +50,8 @@ export interface DesktopPaths {
   logFile: string;
   studioRoot: string;
   layoutConfig: string;
+  /** App root containing optional assets/cards/equipment registry sources. */
+  assetRoot?: string;
   initialExportRoot?: string;
 }
 
@@ -57,8 +59,8 @@ export function registerIpc(paths: DesktopPaths): void {
   let catalog: CatalogCard[] = [];
   let exportRoot: string | null = paths.initialExportRoot ?? null;
   const exportedImagePaths = new Map<string, string>();
-  const catalogLoader = createCatalogLoader({ cachePath: paths.catalogCache });
-  const studio = createCardStudioService({ root: paths.studioRoot, layoutPath: paths.layoutConfig, imageCache: paths.imageCache });
+  const catalogLoader = createCatalogLoader({ cachePath: paths.catalogCache, equipmentRoot: paths.assetRoot });
+  const studio = createCardStudioService({ root: paths.studioRoot, layoutPath: paths.layoutConfig, imageCache: paths.imageCache, assetRoot: paths.assetRoot });
 
   const log = async (message: string) => {
     try {
@@ -105,7 +107,7 @@ export function registerIpc(paths: DesktopPaths): void {
   ipcMain.handle(IPC.previewLoad, async (_event, cardId: unknown) => {
     const card = await findById(cardId);
     try {
-      const result = await acquireCardImage(card, { cacheDir: paths.imageCache });
+      const result = await acquireCardImage(card, { cacheDir: paths.imageCache, assetRoot: paths.assetRoot });
       return {
         dataUrl: `data:${card.image_mime_type ?? "application/octet-stream"};base64,${Buffer.from(result.bytes).toString("base64")}`,
         sha256: result.sha256,

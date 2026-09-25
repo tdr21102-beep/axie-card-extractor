@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 import type { CatalogCard } from "./catalog.ts";
+import { equipmentSourcePath } from "./equipment-registry.ts";
 import { classDirectory } from "./naming.ts";
 
 export function sha256(bytes: Uint8Array): string {
@@ -66,6 +67,17 @@ export function validateImageBytes(bytes: Uint8Array, card: CatalogCard): void {
 }
 
 export async function inspectCardCache(card: CatalogCard, cacheDir?: string) {
+  const equipmentPath = equipmentSourcePath(card, cacheDir === undefined ? "." : undefined);
+  if (equipmentPath) {
+    try {
+      const bytes = await readFile(equipmentPath);
+      validateImageBytes(bytes, card);
+      return { cached: true, sha256: sha256(bytes), path: equipmentPath };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { cached: false, sha256: null, path: equipmentPath };
+      throw error;
+    }
+  }
   const path = cachePathForCard(card, cacheDir);
   const bytes = await validCachedBytes(path, card);
   return { cached: bytes !== null, sha256: bytes ? sha256(bytes) : null, path };
@@ -83,9 +95,24 @@ const imageDownloads = new Map<string, Promise<AcquiredCardImage>>();
 
 async function acquireCardImageUncached(card: CatalogCard, options: {
   cacheDir?: string;
+  assetRoot?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }): Promise<AcquiredCardImage> {
+  const equipmentPath = equipmentSourcePath(card, options.assetRoot);
+  if (equipmentPath) {
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(await readFile(equipmentPath));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(`Equipment source asset is missing: assets/cards/equipment/${card.equipment_slot}/${card.local_name}.png`);
+      }
+      throw error;
+    }
+    validateImageBytes(bytes, card);
+    return { bytes, cache: "hit", cachePath: equipmentPath, sha1: sha1(bytes), sha256: sha256(bytes) };
+  }
   if (!card.image_url || !card.image_asset_id) throw new Error(`Card ${card.name} has no source image`);
   const cachePath = cachePathForCard(card, options.cacheDir);
   let bytes = await validCachedBytes(cachePath, card);
@@ -107,10 +134,11 @@ async function acquireCardImageUncached(card: CatalogCard, options: {
 
 export function acquireCardImage(card: CatalogCard, options: {
   cacheDir?: string;
+  assetRoot?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 } = {}): Promise<AcquiredCardImage> {
-  const cachePath = cachePathForCard(card, options.cacheDir);
+  const cachePath = equipmentSourcePath(card, options.assetRoot) ?? cachePathForCard(card, options.cacheDir);
   const active = imageDownloads.get(cachePath);
   if (active) return active;
   const pending = acquireCardImageUncached(card, options);

@@ -7,6 +7,10 @@ export interface CatalogCard {
   id: string;
   slug: string;
   local_name: string;
+  /** Omitted for legacy Sanity part cards. */
+  card_origin?: CardOrigin;
+  /** Required for equipment cards and omitted for part cards. */
+  equipment_slot?: EquipmentSlot;
   class: string | null;
   class_id: string | null;
   part: string | null;
@@ -25,13 +29,16 @@ export interface CatalogCard {
   created_at: string;
   updated_at: string;
   source: {
-    provider: "Sanity";
+    provider: "Sanity" | "Equipment Registry";
     project_id: string;
     dataset: string;
     api_version: string;
     document_id: string;
   };
 }
+
+export type CardOrigin = "part" | "equipment";
+export type EquipmentSlot = "weapon" | "shield" | "helmet" | "boots";
 
 export function portableTextLines(body: PortableTextBlock[] | null): string[] {
   if (!body) return [];

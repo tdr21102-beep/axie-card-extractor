@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { CatalogCard } from "./catalog.ts";
+import { cardIdentity } from "./card-identity.ts";
 import { defaultGameMetadata } from "./card-studio.ts";
 import { parseCardVisualLayoutOverrides, type CardVisualLayoutOverrides } from "./card-layout-overrides.ts";
 import {
@@ -54,8 +55,8 @@ function serializeDraft(document: StudioDraftDocument): string {
 }
 
 export function studioDraftPath(card: CatalogCard, root = "."): string {
-  const identity = defaultGameMetadata(card);
-  return resolve(root, "cards", "drafts", identity.class, `${identity.id}.json`);
+  const identity = cardIdentity(card);
+  return resolve(root, "cards", "drafts", ...identity.pathSegments.slice(0, -1), `${identity.id}.json`);
 }
 
 function validateStoredDraft(value: unknown, card: CatalogCard): StudioDraftDocument {

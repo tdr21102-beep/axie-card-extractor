@@ -1,4 +1,4 @@
-import type { CatalogCard } from "./catalog.ts";
+import type { CardOrigin, CatalogCard, EquipmentSlot } from "./catalog.ts";
 import type { ProductionCardState, ProductionStatus } from "./production-contract.ts";
 
 export type ProductionFilterScope = "all" | "set" | "slot";
@@ -10,6 +10,9 @@ export interface ProductionCardFilters {
   slotCardIds: readonly string[];
   className: string | null;
   part: string | null;
+  /** Optional so callers built against the part-only filter shape remain valid. */
+  cardOrigin?: CardOrigin | null;
+  equipmentSlot?: EquipmentSlot | null;
   status: ProductionStatus | null;
   hasEffects: boolean;
   hasClean: boolean;
@@ -37,6 +40,8 @@ export function filterProductionCards(
     if (filters.scope === "slot" && !slotCards.has(card.id)) return false;
     if (filters.className && card.class !== filters.className) return false;
     if (filters.part && card.part !== filters.part) return false;
+    if (filters.cardOrigin && (card.card_origin ?? "part") !== filters.cardOrigin) return false;
+    if (filters.equipmentSlot && card.equipment_slot !== filters.equipmentSlot) return false;
     if (filters.status && state?.status !== filters.status) return false;
     if (filters.hasEffects && (state?.effect_count ?? 0) === 0) return false;
     if (filters.hasClean && !state?.clean_available) return false;

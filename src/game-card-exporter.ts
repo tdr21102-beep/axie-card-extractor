@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { link, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import type { CatalogCard } from "./catalog.ts";
+import { cardIdentity } from "./card-identity.ts";
 import { sha256 } from "./downloader.ts";
-import { classDirectory, snakeCase } from "./naming.ts";
+import { snakeCase } from "./naming.ts";
 import { assertGameMetadataGameReady, parseGameMetadata, type CardGameMetadata } from "./game-metadata.ts";
 
 export const GAME_CARD_PACKAGE_SCHEMA_VERSION = 1 as const;
@@ -43,9 +44,8 @@ export class GameExportConflictError extends Error {
 }
 
 export function gameCardExportPaths(card: CatalogCard, exportRoot: string) {
-  const cardId = snakeCase(card.local_name);
-  if (!cardId) throw new Error("Card has no valid local name for game export");
-  const directory = resolve(exportRoot, "game_export", classDirectory(card.class), cardId);
+  const identity = cardIdentity(card);
+  const directory = resolve(exportRoot, "game_export", ...identity.pathSegments);
   return { directory, image: resolve(directory, "card.png"), metadata: resolve(directory, "card.json") };
 }
 

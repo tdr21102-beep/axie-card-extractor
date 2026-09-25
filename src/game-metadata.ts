@@ -1,3 +1,5 @@
+import type { CardOrigin, EquipmentSlot } from "./catalog.ts";
+
 export const GAME_METADATA_SCHEMA_VERSION = 2 as const;
 
 export const TARGET_VOCABULARY = [
@@ -163,8 +165,13 @@ export interface CardGameMetadata {
   schema_version: typeof GAME_METADATA_SCHEMA_VERSION;
   id: string;
   name: string;
-  class: string;
-  part: string;
+  /** Present for part cards; equipment deliberately has neither field. */
+  class?: string;
+  part?: string;
+  /** Omitted for existing part documents. */
+  card_origin?: CardOrigin;
+  /** Present only with card_origin: equipment. */
+  equipment_slot?: EquipmentSlot;
   cost: number | null;
   value: number | null;
   card_type: string;
@@ -224,6 +231,8 @@ const TOP_LEVEL_KEYS = new Set([
   "name",
   "class",
   "part",
+  "card_origin",
+  "equipment_slot",
   "cost",
   "value",
   "card_type",
@@ -287,6 +296,33 @@ function readString(
     addIssue(issues, path, `Must be at most ${options.maxLength} characters`);
   }
   return candidate;
+}
+
+function readOptionalString(
+  value: Record<string, unknown>,
+  key: string,
+  path: string,
+  issues: GameMetadataValidationIssue[],
+  options: { maxLength?: number } = {}
+): string | undefined {
+  if (value[key] === undefined) return undefined;
+  return readString(value, key, path, issues, options);
+}
+
+function readCardOrigin(value: Record<string, unknown>, issues: GameMetadataValidationIssue[]): CardOrigin {
+  if (value.card_origin === undefined) return "part";
+  if (value.card_origin === "part" || value.card_origin === "equipment") return value.card_origin;
+  addIssue(issues, "card_origin", "Must be part or equipment");
+  return "part";
+}
+
+function readEquipmentSlot(value: Record<string, unknown>, issues: GameMetadataValidationIssue[]): EquipmentSlot | undefined {
+  if (value.equipment_slot === undefined) return undefined;
+  if (value.equipment_slot === "weapon" || value.equipment_slot === "shield" || value.equipment_slot === "helmet" || value.equipment_slot === "boots") {
+    return value.equipment_slot;
+  }
+  addIssue(issues, "equipment_slot", "Must be weapon, shield, helmet, or boots");
+  return undefined;
 }
 
 function readStatus(
@@ -507,10 +543,17 @@ export function validateGameMetadataV2(value: unknown): GameMetadataValidationRe
     addIssue(issues, "schema_version", `Must equal ${GAME_METADATA_SCHEMA_VERSION}`);
   }
 
+  const origin = readCardOrigin(value, issues);
+  const equipmentSlot = readEquipmentSlot(value, issues);
   const id = readString(value, "id", "id", issues, { maxLength: 200 });
   const name = readString(value, "name", "name", issues, { maxLength: 200 });
-  const cardClass = readString(value, "class", "class", issues, { maxLength: 100 });
-  const part = readString(value, "part", "part", issues, { maxLength: 100 });
+  const cardClass = readOptionalString(value, "class", "class", issues, { maxLength: 100 });
+  const part = readOptionalString(value, "part", "part", issues, { maxLength: 100 });
+  if (origin === "part" && !cardClass) addIssue(issues, "class", "Must be a string");
+  if (origin === "part" && !part) addIssue(issues, "part", "Must be a string");
+  if (origin === "equipment" && (cardClass !== undefined || part !== undefined)) addIssue(issues, "class", "Equipment metadata must not use class or part");
+  if (origin === "equipment" && !equipmentSlot) addIssue(issues, "equipment_slot", "Equipment metadata requires a slot");
+  if (origin === "part" && equipmentSlot !== undefined) addIssue(issues, "equipment_slot", "Part metadata must not use an equipment slot");
   const cost = readNullableVisualNumber(value, "cost", issues);
   const visualValue = readNullableVisualNumber(value, "value", issues);
   const cardType = readString(value, "card_type", "card_type", issues, { allowEmpty: true, maxLength: 100 });
@@ -568,8 +611,7 @@ export function validateGameMetadataV2(value: unknown): GameMetadataValidationRe
     schema_version: GAME_METADATA_SCHEMA_VERSION,
     id,
     name,
-    class: cardClass,
-    part,
+    ...(origin === "part" ? { class: cardClass ?? "", part: part ?? "" } : { card_origin: "equipment" as const, equipment_slot: equipmentSlot! }),
     cost,
     value: visualValue,
     card_type: cardType,

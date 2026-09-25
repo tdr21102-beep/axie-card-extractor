@@ -1,14 +1,23 @@
 import { buildCatalog } from "./catalog.ts";
+import { loadEquipmentRegistry } from "./equipment-registry.ts";
 import type { CatalogPayload } from "./ipc-contract.ts";
 import { fetchCards } from "./source.ts";
 
-export function createCatalogLoader(options: { cachePath: string; fetchImpl?: typeof fetch }) {
+export function createCatalogLoader(options: { cachePath: string; equipmentRoot?: string; fetchImpl?: typeof fetch }) {
   let current: CatalogPayload | null = null;
   let inFlight: { refresh: boolean; promise: Promise<CatalogPayload> } | null = null;
 
   const perform = async (refresh: boolean): Promise<CatalogPayload> => {
     const source = await fetchCards({ cachePath: options.cachePath, refresh, fetchImpl: options.fetchImpl });
-    const payload = { cards: buildCatalog(source.cards), cache: source.cache, fetchedAt: source.fetchedAt };
+    const [parts, equipment] = await Promise.all([
+      Promise.resolve(buildCatalog(source.cards)),
+      options.equipmentRoot ? loadEquipmentRegistry(options.equipmentRoot) : Promise.resolve([])
+    ]);
+    const payload = {
+      cards: [...parts, ...equipment].sort((left, right) => left.name.localeCompare(right.name) || left.slug.localeCompare(right.slug)),
+      cache: source.cache,
+      fetchedAt: source.fetchedAt
+    };
     current = payload;
     return payload;
   };

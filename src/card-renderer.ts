@@ -5,6 +5,7 @@ import { createCanvas, GlobalFonts, loadImage, type SKRSContext2D } from "@napi-
 import type { CardLayout, CardTextFieldLayout } from "./card-layout.ts";
 import type { CardGameMetadata } from "./card-studio.ts";
 import { cardTypeLabel } from "./card-type-definitions.ts";
+import { pngBytesForDecode } from "./png-compat.ts";
 
 export interface RenderedCard {
   bytes: Uint8Array;
@@ -218,7 +219,7 @@ export async function renderCard(
   const cleanCopy = Uint8Array.from(cleanBytes);
   let cleanImage;
   try {
-    cleanImage = await loadImage(cleanCopy);
+    cleanImage = await loadImage(pngBytesForDecode(cleanCopy));
   } catch (error) {
     throw new Error("Clean visual must be a decodable image", { cause: error });
   }

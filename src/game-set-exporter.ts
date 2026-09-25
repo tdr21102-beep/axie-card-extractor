@@ -3,6 +3,7 @@ import { link, mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/pro
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import type { CatalogCard } from "./catalog.ts";
+import { cardIdentity } from "./card-identity.ts";
 import { sha256 } from "./downloader.ts";
 import {
   exportGameCardPackage,
@@ -10,7 +11,6 @@ import {
   type GameCardExportResult,
   type GameVisualSource
 } from "./game-card-exporter.ts";
-import { classDirectory, snakeCase } from "./naming.ts";
 import {
   GAME_SET_MANIFEST_SCHEMA_VERSION,
   type AxieSlot,
@@ -163,7 +163,7 @@ function portableError(error: unknown, roots: readonly string[]): string {
 interface PlannedCandidate {
   candidate: GameSetExportCandidate;
   localId: string;
-  cardClass: string;
+  directorySegments: readonly string[];
   outputIdentity: string;
 }
 
@@ -186,14 +186,13 @@ function planCandidate(
   if (candidate.card.id !== catalogId || candidate.production.card_id !== catalogId) {
     return "Card production identity does not match the Card Set reference";
   }
-  const localId = snakeCase(candidate.card.local_name);
-  const cardClass = classDirectory(candidate.card.class);
-  if (!localId) return "Card has no valid local identity";
-  if (!cardClass) return "Card has no valid class directory";
+  let identity;
+  try { identity = cardIdentity(candidate.card); } catch (error) { return error instanceof Error ? error.message : "Card has no valid local identity"; }
+  const localId = identity.id;
   if (!candidate.production.game_ready || !candidate.production.exportable_visual_sources.includes(visualSource)) {
     return "Card is not Game Ready for the selected visual source";
   }
-  return { candidate, localId, cardClass, outputIdentity: posix(cardClass, localId) };
+  return { candidate, localId, directorySegments: identity.pathSegments.slice(0, -1), outputIdentity: posix(...identity.pathSegments) };
 }
 
 function mapAxiesToExportedIds(axies: readonly AxieSlot[], localIdByCatalogId: ReadonlyMap<string, string>): AxieSlot[] {
@@ -291,9 +290,9 @@ export async function exportGameSet(input: GameSetExportInput): Promise<GameSetE
       continue;
     }
     outputOwners.set(planned.outputIdentity, catalogId);
-    const { candidate, localId, cardClass } = planned;
+    const { candidate, localId, directorySegments } = planned;
 
-    const relativeDirectory = posix("cards", cardClass, localId);
+    const relativeDirectory = posix("cards", ...directorySegments, localId);
     const relativePng = posix(relativeDirectory, "card.png");
     const relativeJson = posix(relativeDirectory, "card.json");
     const finalPng = resolve(directory, ...relativePng.split("/"));
@@ -301,7 +300,13 @@ export async function exportGameSet(input: GameSetExportInput): Promise<GameSetE
     const stagingRoot = await mkdtemp(join(tmpdir(), "axie-game-set-"));
     try {
       const staged = await input.exportOne(candidate.card, input.visualSource, stagingRoot);
-      if (staged.document.id !== localId || staged.document.class !== cardClass) {
+      const expectedIdentity = cardIdentity(candidate.card);
+      if (
+        staged.document.id !== localId ||
+        (staged.document.card_origin ?? "part") !== expectedIdentity.origin ||
+        staged.document.equipment_slot !== expectedIdentity.equipmentSlot ||
+        staged.document.class !== (expectedIdentity.origin === "part" ? expectedIdentity.classDirectory : undefined)
+      ) {
         throw new Error("Exported card identity does not match the source catalog card");
       }
       const [imageBytes, metadataBytes] = await Promise.all([

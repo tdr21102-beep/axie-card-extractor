@@ -380,6 +380,7 @@ app.whenReady().then(() => {
     logFile: join(userData, "logs", "app.log"),
     studioRoot: process.env.AXIE_GUI_SMOKE_ROOT ?? userData,
     layoutConfig: join(app.getAppPath(), "config", "card_layout.json"),
+    assetRoot: app.getAppPath(),
     initialExportRoot: process.env.AXIE_GUI_SMOKE_EXPORT_ROOT
   });
   createWindow();
